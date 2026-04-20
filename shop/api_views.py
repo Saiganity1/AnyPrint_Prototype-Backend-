@@ -1,5 +1,7 @@
 import json
 
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.models import User
 from django.db import transaction
 from django.http import JsonResponse
 from django.urls import reverse
@@ -39,6 +41,97 @@ def _restore_order_stock(order):
 @require_GET
 def health(request):
     return JsonResponse({'ok': True, 'service': 'backend'})
+
+
+@require_GET
+def auth_me(request):
+    if request.user.is_authenticated:
+        return JsonResponse(
+            {
+                'is_authenticated': True,
+                'user': {
+                    'id': request.user.id,
+                    'username': request.user.username,
+                    'email': request.user.email,
+                },
+            }
+        )
+
+    return JsonResponse({'is_authenticated': False, 'user': None})
+
+
+@csrf_exempt
+@require_POST
+def auth_register(request):
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    username = str(payload.get('username', '')).strip()
+    email = str(payload.get('email', '')).strip()
+    password = str(payload.get('password', ''))
+
+    if not username or not password:
+        return JsonResponse({'error': 'Username and password are required.'}, status=400)
+    if len(password) < 8:
+        return JsonResponse({'error': 'Password must be at least 8 characters.'}, status=400)
+    if User.objects.filter(username=username).exists():
+        return JsonResponse({'error': 'Username already exists.'}, status=400)
+    if email and User.objects.filter(email=email).exists():
+        return JsonResponse({'error': 'Email already exists.'}, status=400)
+
+    user = User.objects.create_user(username=username, email=email, password=password)
+    login(request, user)
+    return JsonResponse(
+        {
+            'message': 'Registration successful.',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+            },
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_POST
+def auth_login(request):
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+
+    username = str(payload.get('username', '')).strip()
+    password = str(payload.get('password', ''))
+
+    if not username or not password:
+        return JsonResponse({'error': 'Username and password are required.'}, status=400)
+
+    user = authenticate(request, username=username, password=password)
+    if not user:
+        return JsonResponse({'error': 'Invalid credentials.'}, status=401)
+
+    login(request, user)
+    return JsonResponse(
+        {
+            'message': 'Login successful.',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+            },
+        }
+    )
+
+
+@csrf_exempt
+@require_POST
+def auth_logout(request):
+    logout(request)
+    return JsonResponse({'message': 'Logout successful.'})
 
 
 @require_GET

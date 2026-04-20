@@ -13,7 +13,10 @@
     <header class="site-header">
         <div class="container nav-wrap">
             <h1>Thread Theory</h1>
-            <button id="cartButton" class="cart-btn">Cart (<span id="cartCount">0</span>)</button>
+            <div class="top-actions">
+                <button id="authButton" class="auth-btn">Login/Register</button>
+                <button id="cartButton" class="cart-btn">Cart (<span id="cartCount">0</span>)</button>
+            </div>
         </div>
     </header>
 
@@ -54,6 +57,39 @@
             <button type="submit" class="btn">Place Order</button>
             <p id="checkoutStatus" class="status"></p>
         </form>
+    </aside>
+
+    <aside id="authPanel" class="auth-panel hidden">
+        <div class="cart-head">
+            <h3>Account</h3>
+            <button id="closeAuth" class="plain-btn">Close</button>
+        </div>
+
+        <div id="authState" class="auth-state"></div>
+
+        <div class="auth-tabs">
+            <button id="showLoginTab" class="chip active">Login</button>
+            <button id="showRegisterTab" class="chip">Register</button>
+        </div>
+
+        <form id="loginForm" class="checkout-form">
+            <h4>Login</h4>
+            <input name="username" placeholder="Username" required />
+            <input name="password" type="password" placeholder="Password" required />
+            <button type="submit" class="btn">Login</button>
+        </form>
+
+        <form id="registerForm" class="checkout-form hidden">
+            <h4>Register</h4>
+            <input name="username" placeholder="Username" required />
+            <input name="email" type="email" placeholder="Email (optional)" />
+            <input name="password" type="password" placeholder="Password" required />
+            <input name="confirm_password" type="password" placeholder="Confirm Password" required />
+            <button type="submit" class="btn">Register</button>
+        </form>
+
+        <button id="logoutButton" class="plain-btn hidden">Logout</button>
+        <p id="authStatus" class="status"></p>
     </aside>
 
     <script src="app.js"></script>

@@ -14,6 +14,26 @@ const cartButton = document.getElementById('cartButton');
 const closeCart = document.getElementById('closeCart');
 const checkoutForm = document.getElementById('checkoutForm');
 const checkoutStatus = document.getElementById('checkoutStatus');
+const authButton = document.getElementById('authButton');
+const authPanel = document.getElementById('authPanel');
+const closeAuth = document.getElementById('closeAuth');
+const authState = document.getElementById('authState');
+const authStatus = document.getElementById('authStatus');
+const showLoginTab = document.getElementById('showLoginTab');
+const showRegisterTab = document.getElementById('showRegisterTab');
+const loginForm = document.getElementById('loginForm');
+const registerForm = document.getElementById('registerForm');
+const logoutButton = document.getElementById('logoutButton');
+
+let currentUser = null;
+
+async function apiFetch(url, options = {}) {
+    const config = {
+        credentials: 'include',
+        ...options,
+    };
+    return fetch(url, config);
+}
 
 function saveCart() {
     localStorage.setItem('tt_cart', JSON.stringify(cart));
@@ -115,7 +135,7 @@ function renderCart() {
 }
 
 async function loadCategories() {
-    const res = await fetch(`${API_BASE}/categories/`);
+    const res = await apiFetch(`${API_BASE}/categories/`);
     const body = await res.json();
     categories = body.categories || [];
     renderCategories();
@@ -124,12 +144,39 @@ async function loadCategories() {
 async function loadProducts(category = '') {
     selectedCategory = category;
     const query = category ? `?category=${encodeURIComponent(category)}` : '';
-    const res = await fetch(`${API_BASE}/products/${query}`);
+    const res = await apiFetch(`${API_BASE}/products/${query}`);
     const body = await res.json();
     products = body.products || [];
     renderCategories();
     renderProducts();
     renderCart();
+}
+
+function setAuthTab(isLogin) {
+    loginForm.classList.toggle('hidden', !isLogin);
+    registerForm.classList.toggle('hidden', isLogin);
+    showLoginTab.classList.toggle('active', isLogin);
+    showRegisterTab.classList.toggle('active', !isLogin);
+    authStatus.textContent = '';
+}
+
+function renderAuthState() {
+    if (currentUser) {
+        authState.innerHTML = `<p><strong>Signed in as:</strong> ${currentUser.username}</p>`;
+        authButton.textContent = currentUser.username;
+        logoutButton.classList.remove('hidden');
+    } else {
+        authState.innerHTML = '<p class="meta">You are browsing as guest.</p>';
+        authButton.textContent = 'Login/Register';
+        logoutButton.classList.add('hidden');
+    }
+}
+
+async function refreshAuthState() {
+    const res = await apiFetch(`${API_BASE}/auth/me/`);
+    const body = await res.json();
+    currentUser = body.is_authenticated ? body.user : null;
+    renderAuthState();
 }
 
 checkoutForm.addEventListener('submit', async (event) => {
@@ -157,7 +204,7 @@ checkoutForm.addEventListener('submit', async (event) => {
         items,
     };
 
-    const res = await fetch(`${API_BASE}/orders/`, {
+    const res = await apiFetch(`${API_BASE}/orders/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -182,6 +229,90 @@ checkoutForm.addEventListener('submit', async (event) => {
 
 cartButton.addEventListener('click', () => cartPanel.classList.remove('hidden'));
 closeCart.addEventListener('click', () => cartPanel.classList.add('hidden'));
+authButton.addEventListener('click', () => authPanel.classList.remove('hidden'));
+closeAuth.addEventListener('click', () => authPanel.classList.add('hidden'));
+showLoginTab.addEventListener('click', () => setAuthTab(true));
+showRegisterTab.addEventListener('click', () => setAuthTab(false));
+
+loginForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    authStatus.textContent = '';
+    const formData = new FormData(loginForm);
+    const payload = {
+        username: formData.get('username'),
+        password: formData.get('password'),
+    };
+
+    const res = await apiFetch(`${API_BASE}/auth/login/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+
+    if (!res.ok) {
+        authStatus.textContent = body.error || 'Login failed.';
+        return;
+    }
+
+    currentUser = body.user;
+    renderAuthState();
+    authStatus.textContent = 'Login successful.';
+    loginForm.reset();
+});
+
+registerForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    authStatus.textContent = '';
+    const formData = new FormData(registerForm);
+    const password = String(formData.get('password') || '');
+    const confirmPassword = String(formData.get('confirm_password') || '');
+
+    if (password !== confirmPassword) {
+        authStatus.textContent = 'Passwords do not match.';
+        return;
+    }
+
+    const payload = {
+        username: formData.get('username'),
+        email: formData.get('email'),
+        password,
+    };
+
+    const res = await apiFetch(`${API_BASE}/auth/register/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+
+    if (!res.ok) {
+        authStatus.textContent = body.error || 'Registration failed.';
+        return;
+    }
+
+    currentUser = body.user;
+    renderAuthState();
+    authStatus.textContent = 'Registration successful. You are now logged in.';
+    registerForm.reset();
+    setAuthTab(true);
+});
+
+logoutButton.addEventListener('click', async () => {
+    authStatus.textContent = '';
+    const res = await apiFetch(`${API_BASE}/auth/logout/`, {
+        method: 'POST',
+    });
+    if (!res.ok) {
+        authStatus.textContent = 'Logout failed.';
+        return;
+    }
+
+    currentUser = null;
+    renderAuthState();
+    authStatus.textContent = 'Logged out.';
+});
 
 saveCart();
-loadCategories().then(() => loadProducts(''));
+setAuthTab(true);
+refreshAuthState().then(() => loadCategories().then(() => loadProducts('')));
