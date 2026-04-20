@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thread Theory Store</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <header class="site-header">
+        <div class="container nav-wrap">
+            <h1>Thread Theory</h1>
+            <button id="cartButton" class="cart-btn">Cart (<span id="cartCount">0</span>)</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <p class="eyebrow">Independent Frontend App</p>
+            <h2>Premium T-Shirts Ready to Ship</h2>
+            <p>Connected to a separate Django backend API for catalog, checkout, and payment redirects.</p>
+        </section>
+
+        <section>
+            <div id="categoryChips" class="category-chips"></div>
+            <div id="products" class="product-grid"></div>
+        </section>
+    </main>
+
+    <aside id="cartPanel" class="cart-panel hidden">
+        <div class="cart-head">
+            <h3>Your Cart</h3>
+            <button id="closeCart" class="plain-btn">Close</button>
+        </div>
+        <div id="cartItems"></div>
+
+        <form id="checkoutForm" class="checkout-form">
+            <h4>Checkout</h4>
+            <input name="full_name" placeholder="Full Name" required />
+            <input name="email" type="email" placeholder="Email" required />
+            <input name="phone" placeholder="Phone" required />
+            <textarea name="address" placeholder="Address" rows="3" required></textarea>
+            <select name="payment_method" required>
+                <option value="">Select payment method</option>
+                <option value="COD">Cash on Delivery</option>
+                <option value="PAYMONGO">GCash / QR PH via PayMongo</option>
+                <option value="STRIPE">Card via Stripe</option>
+                <option value="BANK">Bank Transfer</option>
+            </select>
+            <textarea name="notes" placeholder="Order notes (optional)" rows="2"></textarea>
+            <button type="submit" class="btn">Place Order</button>
+            <p id="checkoutStatus" class="status"></p>
+        </form>
+    </aside>
+
+    <script src="app.js"></script>
+</body>
+</html>
