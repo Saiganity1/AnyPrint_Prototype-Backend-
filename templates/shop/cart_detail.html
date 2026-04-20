@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block title %}Cart | Thread Theory{% endblock %}
+
+{% block content %}
+<section class="section-head">
+    <h1>Your Cart</h1>
+    <p>Review your items and update quantities before checkout.</p>
+</section>
+
+{% if cart_items %}
+    {% if has_stock_issue %}
+        <div class="message error">Some quantities exceed available stock. Update your cart before checkout.</div>
+    {% endif %}
+    <div class="cart-list">
+        {% for item in cart_items %}
+            <div class="cart-item">
+                <div>
+                    <h3>{{ item.product.name }}</h3>
+                    <p>PHP {{ item.product.price }} each | Available: {{ item.product.stock_quantity }}</p>
+                    {% if not item.is_stock_enough %}
+                        <p class="stock-warning">Requested quantity is higher than stock.</p>
+                    {% endif %}
+                </div>
+                <form method="post" action="{% url 'shop:update_cart_item' item.product.id %}" class="qty-form">
+                    {% csrf_token %}
+                    <input type="number" name="quantity" value="{{ item.quantity }}" min="1" max="{{ item.product.stock_quantity }}">
+                    <button type="submit" class="btn secondary">Update</button>
+                </form>
+                <div class="item-end">
+                    <strong>PHP {{ item.subtotal }}</strong>
+                    <a class="text-link" href="{% url 'shop:remove_from_cart' item.product.id %}">Remove</a>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <div class="summary-box">
+        <h2>Total: PHP {{ total }}</h2>
+        {% if has_stock_issue %}
+            <button class="btn" disabled>Fix Stock Issues First</button>
+        {% else %}
+            <a class="btn" href="{% url 'shop:checkout' %}">Proceed to Checkout</a>
+        {% endif %}
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>Your cart is empty.</p>
+        <a class="btn" href="{% url 'shop:product_list' %}">Start Shopping</a>
+    </div>
+{% endif %}
+{% endblock %}
