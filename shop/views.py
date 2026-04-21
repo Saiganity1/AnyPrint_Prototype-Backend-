@@ -7,7 +7,7 @@ from django.urls import reverse
 from django.utils.text import slugify
 
 from .forms import CheckoutForm
-from .models import Category, Order, OrderItem, Product
+from .models import Category, Order, OrderItem, Product, ProductVariant
 from .services import (
     PaymentGatewayError,
     create_paymongo_checkout_session,
@@ -26,16 +26,16 @@ def _bootstrap_products_if_empty():
         category_map[category_name] = category
 
     starter_products = [
-        ('Classic White Tee', 'A premium cotton shirt for daily comfort.', Decimal('499.00'), True, 'Essentials', 30),
-        ('Ocean Blue Oversize', 'Relaxed fit with breathable fabric and streetwear vibe.', Decimal('699.00'), True, 'Oversized', 20),
-        ('Minimal Black Tee', 'Soft heavyweight shirt with clean modern styling.', Decimal('649.00'), False, 'Essentials', 25),
-        ('Sunset Graphic Shirt', 'Limited print inspired by tropical city sunsets.', Decimal('799.00'), True, 'Graphic', 12),
-        ('Olive Utility Tee', 'Durable and versatile with all-day comfort.', Decimal('599.00'), False, 'Oversized', 18),
-        ('Sand Beige Essential', 'Neutral tone shirt that pairs with anything.', Decimal('549.00'), False, 'Essentials', 22),
+        ('Classic White Tee', 'A premium cotton shirt for daily comfort.', Decimal('499.00'), True, 'Essentials', 30, 'Classic', ['Black', 'White']),
+        ('Ocean Blue Oversize', 'Relaxed fit with breathable fabric and streetwear vibe.', Decimal('699.00'), True, 'Oversized', 20, 'Street', ['Black', 'Sand']),
+        ('Minimal Black Tee', 'Soft heavyweight shirt with clean modern styling.', Decimal('649.00'), False, 'Essentials', 25, 'Minimal', ['Black', 'White']),
+        ('Sunset Graphic Shirt', 'Limited print inspired by tropical city sunsets.', Decimal('799.00'), True, 'Graphic', 12, 'Graphic', ['Black', 'Cream', 'Navy']),
+        ('Olive Utility Tee', 'Durable and versatile with all-day comfort.', Decimal('599.00'), False, 'Oversized', 18, 'Street', ['Black', 'Olive']),
+        ('Sand Beige Essential', 'Neutral tone shirt that pairs with anything.', Decimal('549.00'), False, 'Essentials', 22, 'Classic', ['Black', 'Sand']),
     ]
 
-    for name, description, price, is_featured, category_name, stock_qty in starter_products:
-        Product.objects.create(
+    for name, description, price, is_featured, category_name, stock_qty, print_style, colors in starter_products:
+        product = Product.objects.create(
             name=name,
             slug=slugify(name),
             category=category_map[category_name],
@@ -43,7 +43,23 @@ def _bootstrap_products_if_empty():
             price=price,
             stock_quantity=stock_qty,
             is_featured=is_featured,
+            print_style=print_style,
         )
+
+        sizes = [ProductVariant.SIZE_S, ProductVariant.SIZE_M, ProductVariant.SIZE_L, ProductVariant.SIZE_XL]
+        combinations = [(size, color) for size in sizes for color in colors]
+        base_stock = stock_qty // len(combinations)
+        remainder = stock_qty % len(combinations)
+
+        for index, (size, color) in enumerate(combinations):
+            variant_stock = base_stock + (1 if index < remainder else 0)
+            ProductVariant.objects.create(
+                product=product,
+                size=size,
+                color=color,
+                stock_quantity=variant_stock,
+                sku=slugify(f'{product.slug}-{size}-{color}'),
+            )
 
 
 def _get_cart(session):
