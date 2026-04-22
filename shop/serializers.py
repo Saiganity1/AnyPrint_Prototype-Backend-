@@ -14,6 +14,23 @@ class AuthLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
 
+class SocialAuthLoginSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(choices=['google', 'facebook'])
+    token = serializers.CharField(trim_whitespace=True)
+
+
+class PhoneAuthRequestSerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=32, trim_whitespace=True)
+
+
+class PhoneAuthVerifySerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=32, trim_whitespace=True)
+    code = serializers.CharField(max_length=6, trim_whitespace=True)
+    intent = serializers.ChoiceField(choices=['login', 'register'], required=False, default='login')
+    username = serializers.CharField(max_length=150, trim_whitespace=True, required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+
 class CheckoutItemSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(required=False, allow_null=True)
     variant_id = serializers.IntegerField(required=False, allow_null=True)

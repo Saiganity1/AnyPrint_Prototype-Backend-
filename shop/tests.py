@@ -2,6 +2,7 @@ import json
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -39,6 +40,102 @@ class AuthApiTests(TestCase):
 		login_body = login_response.json()
 		self.assertIn('user', login_body)
 		self.assertIn('tokens', login_body)
+
+	@patch('shop.api_views.requests.get')
+	def test_google_social_login(self, mock_requests_get):
+		mock_requests_get.return_value.status_code = 200
+		mock_requests_get.return_value.json.return_value = {
+			'email': 'google-user@example.com',
+			'email_verified': 'true',
+			'name': 'Google User',
+		}
+
+		response = self.client.post(
+			reverse('api_auth_social_login'),
+			data=json.dumps({'provider': 'google', 'token': 'google-token-123'}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		body = response.json()
+		self.assertIn('user', body)
+		self.assertIn('tokens', body)
+		self.assertEqual(body.get('auth_provider'), 'google')
+
+	@patch('shop.api_views.requests.get')
+	def test_facebook_social_login(self, mock_requests_get):
+		mock_requests_get.return_value.status_code = 200
+		mock_requests_get.return_value.json.return_value = {
+			'id': 'fb-123',
+			'email': 'facebook-user@example.com',
+			'name': 'Facebook User',
+		}
+
+		response = self.client.post(
+			reverse('api_auth_social_login'),
+			data=json.dumps({'provider': 'facebook', 'token': 'facebook-token-123'}),
+			content_type='application/json',
+		)
+		self.assertEqual(response.status_code, 200)
+		body = response.json()
+		self.assertIn('user', body)
+		self.assertIn('tokens', body)
+		self.assertEqual(body.get('auth_provider'), 'facebook')
+
+	def test_phone_otp_request_and_verify_login(self):
+		request_response = self.client.post(
+			reverse('api_auth_phone_request'),
+			data=json.dumps({'phone_number': '09171234567'}),
+			content_type='application/json',
+		)
+		self.assertEqual(request_response.status_code, 200)
+		phone_number = '+639171234567'
+		otp_code = cache.get(f'auth:phone:otp:{phone_number}')
+		self.assertTrue(otp_code)
+
+		register_response = self.client.post(
+			reverse('api_auth_phone_verify'),
+			data=json.dumps(
+				{
+					'phone_number': '09171234567',
+					'code': str(otp_code),
+					'intent': 'register',
+					'username': 'phone_user_1',
+					'email': 'phone-user@example.com',
+				}
+			),
+			content_type='application/json',
+		)
+		self.assertEqual(register_response.status_code, 200)
+		register_body = register_response.json()
+		self.assertIn('user', register_body)
+		self.assertIn('tokens', register_body)
+		self.assertEqual(register_body.get('auth_provider'), 'phone')
+
+		second_request_response = self.client.post(
+			reverse('api_auth_phone_request'),
+			data=json.dumps({'phone_number': '09171234567'}),
+			content_type='application/json',
+		)
+		self.assertEqual(second_request_response.status_code, 200)
+		second_code = cache.get(f'auth:phone:otp:{phone_number}')
+		self.assertTrue(second_code)
+
+		login_response = self.client.post(
+			reverse('api_auth_phone_verify'),
+			data=json.dumps(
+				{
+					'phone_number': '09171234567',
+					'code': str(second_code),
+					'intent': 'login',
+				}
+			),
+			content_type='application/json',
+		)
+		self.assertEqual(login_response.status_code, 200)
+		login_body = login_response.json()
+		self.assertIn('user', login_body)
+		self.assertIn('tokens', login_body)
+		self.assertEqual(login_body.get('auth_provider'), 'phone')
 
 
 class CheckoutAndOrderTests(TestCase):

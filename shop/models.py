@@ -32,6 +32,7 @@ class UserProfile(models.Model):
 	user = models.OneToOneField(settings.AUTH_USER_MODEL, related_name='profile', on_delete=models.CASCADE)
 	role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_USER)
 	display_name = models.CharField(max_length=120, blank=True)
+	phone_number = models.CharField(max_length=20, blank=True, null=True, unique=True)
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 

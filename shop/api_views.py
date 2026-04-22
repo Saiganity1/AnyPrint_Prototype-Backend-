@@ -1,11 +1,15 @@
 import json
 import logging
+import re
+import secrets
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+import requests
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
 from django.db import transaction
 from django.db.models import Avg, Count, Q, Sum
@@ -37,7 +41,10 @@ from .serializers import (
     CheckoutQuoteSerializer,
     OrderCreateSerializer,
     PaymentWebhookSerializer,
+    PhoneAuthRequestSerializer,
+    PhoneAuthVerifySerializer,
     ProductReviewCreateSerializer,
+    SocialAuthLoginSerializer,
     TrackOrderSerializer,
     WishlistToggleSerializer,
 )
@@ -48,6 +55,9 @@ from .services import (
 )
 
 logger = logging.getLogger('shop')
+
+PHONE_OTP_TTL_SECONDS = 300
+PHONE_OTP_MAX_ATTEMPTS = 5
 
 
 def _api_error(message, *, status=400, code='bad_request', details=None):
@@ -144,6 +154,132 @@ def _normalize_text(value):
     return str(value or '').strip()
 
 
+def _normalize_phone_number(value):
+    cleaned = re.sub(r'[^\d+]', '', _normalize_text(value))
+    if cleaned.startswith('00'):
+        cleaned = f'+{cleaned[2:]}'
+    if cleaned.startswith('0'):
+        cleaned = f'+63{cleaned[1:]}'
+    return cleaned
+
+
+def _phone_otp_cache_key(phone_number):
+    return f'auth:phone:otp:{phone_number}'
+
+
+def _phone_otp_attempts_cache_key(phone_number):
+    return f'auth:phone:attempts:{phone_number}'
+
+
+def _generate_phone_otp_code():
+    return f'{secrets.randbelow(1000000):06d}'
+
+
+def _username_seed(value):
+    base = re.sub(r'[^a-z0-9_]+', '', _normalize_text(value).lower().replace(' ', '_'))
+    return base[:24] or 'user'
+
+
+def _unique_username(seed):
+    candidate = seed[:150] or 'user'
+    if not User.objects.filter(username=candidate).exists():
+        return candidate
+
+    for _index in range(1, 2000):
+        suffix = secrets.token_hex(2)
+        candidate = f'{seed[:145]}_{suffix}'[:150]
+        if not User.objects.filter(username=candidate).exists():
+            return candidate
+
+    return f'user_{secrets.token_hex(6)}'[:150]
+
+
+def _get_or_create_social_user(*, email='', display_name='', preferred_username=''):
+    user = None
+    if email:
+        user = User.objects.filter(email__iexact=email).first()
+
+    if not user and preferred_username:
+        user = User.objects.filter(username=preferred_username).first()
+
+    if user:
+        updates = []
+        if email and not user.email:
+            user.email = email
+            updates.append('email')
+        if updates:
+            user.save(update_fields=updates)
+    else:
+        seed_value = preferred_username or (email.split('@')[0] if email else display_name)
+        username = _unique_username(_username_seed(seed_value))
+        user = User(username=username, email=email or '')
+        user.set_unusable_password()
+        user.save()
+
+    profile = _get_or_create_profile(user)
+    if display_name and profile.display_name != display_name:
+        profile.display_name = display_name[:120]
+        profile.save(update_fields=['display_name'])
+
+    return user
+
+
+def _verify_google_token(id_token):
+    try:
+        response = requests.get(
+            'https://oauth2.googleapis.com/tokeninfo',
+            params={'id_token': id_token},
+            timeout=8,
+        )
+    except requests.RequestException:
+        return None, 'Could not verify Google token.'
+
+    if response.status_code != 200:
+        return None, 'Invalid Google token.'
+
+    payload = response.json()
+    email = _normalize_text(payload.get('email')).lower()
+    if not email:
+        return None, 'Google account is missing an email address.'
+
+    if str(payload.get('email_verified')).lower() not in {'true', '1'}:
+        return None, 'Google email is not verified.'
+
+    return {
+        'email': email,
+        'display_name': _normalize_text(payload.get('name')),
+        'preferred_username': _username_seed(email.split('@')[0]),
+    }, ''
+
+
+def _verify_facebook_token(access_token):
+    try:
+        response = requests.get(
+            'https://graph.facebook.com/me',
+            params={'fields': 'id,name,email', 'access_token': access_token},
+            timeout=8,
+        )
+    except requests.RequestException:
+        return None, 'Could not verify Facebook token.'
+
+    if response.status_code != 200:
+        return None, 'Invalid Facebook token.'
+
+    payload = response.json()
+    email = _normalize_text(payload.get('email')).lower()
+    if not email:
+        return None, 'Facebook account is missing an email address.'
+
+    profile_id = _normalize_text(payload.get('id'))
+    preferred_username = _username_seed(email.split('@')[0]) if email else _username_seed(f'fb_{profile_id}')
+
+    return {
+        'email': email,
+        'display_name': _normalize_text(payload.get('name')),
+        'preferred_username': preferred_username,
+    }, ''
+
+
 def _parse_decimal(value, default=Decimal('0.00')):
     try:
         return Decimal(str(value))
@@ -182,6 +318,7 @@ def _serialize_user(user):
         'id': user.id,
         'username': user.username,
         'email': user.email,
+        'phone_number': profile.phone_number or '',
         'role': profile.role,
         'role_label': profile.get_role_display(),
         'is_staff': user.is_staff,
@@ -744,6 +881,160 @@ def auth_login(request):
             'tokens': _issue_tokens_for_user(user),
         },
         message='Login successful.',
+    )
+
+
+@require_POST
+def auth_social_login(request):
+    if _rate_limit_exceeded(request, 'auth_social_login', limit=20, window_seconds=60):
+        return _api_error('Too many social login attempts. Please try again later.', status=429, code='rate_limited')
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = SocialAuthLoginSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    provider = serializer.validated_data['provider']
+    token = serializer.validated_data['token']
+
+    if provider == 'google':
+        identity, verify_error = _verify_google_token(token)
+    else:
+        identity, verify_error = _verify_facebook_token(token)
+
+    if verify_error:
+        return _api_error(verify_error, status=401, code='auth_failed')
+
+    user = _get_or_create_social_user(
+        email=identity['email'],
+        display_name=identity.get('display_name', ''),
+        preferred_username=identity.get('preferred_username', ''),
+    )
+    login(request, user)
+    return _api_ok(
+        {
+            'user': _serialize_user(user),
+            'tokens': _issue_tokens_for_user(user),
+            'auth_provider': provider,
+        },
+        message='Social login successful.',
+    )
+
+
+@require_POST
+def auth_phone_request(request):
+    if _rate_limit_exceeded(request, 'auth_phone_request', limit=10, window_seconds=60):
+        return _api_error('Too many OTP requests. Please try again later.', status=429, code='rate_limited')
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = PhoneAuthRequestSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    phone_number = _normalize_phone_number(serializer.validated_data['phone_number'])
+    if not re.fullmatch(r'\+[1-9]\d{8,14}', phone_number):
+        return _api_error('Enter a valid international phone number.', status=400, code='validation_error')
+
+    otp_code = _generate_phone_otp_code()
+    cache.set(_phone_otp_cache_key(phone_number), otp_code, timeout=PHONE_OTP_TTL_SECONDS)
+    cache.set(_phone_otp_attempts_cache_key(phone_number), 0, timeout=PHONE_OTP_TTL_SECONDS)
+    logger.info('Generated phone OTP for %s', phone_number)
+
+    data = {
+        'phone_number': phone_number,
+        'expires_in_seconds': PHONE_OTP_TTL_SECONDS,
+    }
+    if settings.DEBUG:
+        data['debug_code'] = otp_code
+
+    return _api_ok(data, message='OTP sent.')
+
+
+@require_POST
+def auth_phone_verify(request):
+    if _rate_limit_exceeded(request, 'auth_phone_verify', limit=20, window_seconds=60):
+        return _api_error('Too many OTP verification attempts. Please try again later.', status=429, code='rate_limited')
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = PhoneAuthVerifySerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    phone_number = _normalize_phone_number(serializer.validated_data['phone_number'])
+    code = _normalize_text(serializer.validated_data['code'])
+    intent = serializer.validated_data.get('intent', 'login')
+    cached_code = cache.get(_phone_otp_cache_key(phone_number))
+    attempts_key = _phone_otp_attempts_cache_key(phone_number)
+    attempts = int(cache.get(attempts_key, 0) or 0)
+
+    if not cached_code:
+        return _api_error('OTP expired. Please request a new code.', status=400, code='otp_expired')
+
+    if attempts >= PHONE_OTP_MAX_ATTEMPTS:
+        cache.delete(_phone_otp_cache_key(phone_number))
+        cache.delete(attempts_key)
+        return _api_error('Too many invalid OTP attempts. Request a new code.', status=429, code='rate_limited')
+
+    if code != str(cached_code):
+        cache.set(attempts_key, attempts + 1, timeout=PHONE_OTP_TTL_SECONDS)
+        return _api_error('Invalid OTP code.', status=401, code='auth_failed')
+
+    cache.delete(_phone_otp_cache_key(phone_number))
+    cache.delete(attempts_key)
+
+    existing_profile = UserProfile.objects.select_related('user').filter(phone_number=phone_number).first()
+    if existing_profile:
+        user = existing_profile.user
+        login(request, user)
+        return _api_ok(
+            {
+                'user': _serialize_user(user),
+                'tokens': _issue_tokens_for_user(user),
+                'auth_provider': 'phone',
+                'phone_number': phone_number,
+            },
+            message='Phone login successful.',
+        )
+
+    if intent == 'login':
+        return _api_error('No account is linked to this phone number. Please create an account first.', status=404, code='not_found')
+
+    email = _normalize_text(serializer.validated_data.get('email', '')).lower()
+    username = _normalize_text(serializer.validated_data.get('username', ''))
+    seed = username or f'user_{phone_number[-10:]}'
+    preferred_username = _username_seed(seed)
+    display_name = f'Phone {phone_number[-4:]}'
+
+    user = _get_or_create_social_user(
+        email=email,
+        display_name=display_name,
+        preferred_username=preferred_username,
+    )
+    profile = _get_or_create_profile(user)
+    if profile.phone_number and profile.phone_number != phone_number:
+        return _api_error('This account is already linked to another phone number.', status=400, code='validation_error')
+
+    profile.phone_number = phone_number
+    profile.save(update_fields=['phone_number'])
+
+    login(request, user)
+    return _api_ok(
+        {
+            'user': _serialize_user(user),
+            'tokens': _issue_tokens_for_user(user),
+            'auth_provider': 'phone',
+            'phone_number': phone_number,
+        },
+        message='Phone login successful.',
     )
 
 
