@@ -1,9 +1,11 @@
 import json
+import logging
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.paginator import EmptyPage, Paginator
 from django.db import transaction
 from django.db.models import Avg, Count, Q, Sum
@@ -12,6 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     Category,
@@ -25,11 +28,72 @@ from .models import (
     UserProfile,
     WishlistItem,
 )
+from .notifications import send_order_confirmation_email, send_order_status_email
+from .serializers import (
+    AdminOrderStatusSerializer,
+    AdminUserRoleSerializer,
+    AuthLoginSerializer,
+    AuthRegisterSerializer,
+    CheckoutQuoteSerializer,
+    OrderCreateSerializer,
+    PaymentWebhookSerializer,
+    ProductReviewCreateSerializer,
+    TrackOrderSerializer,
+    WishlistToggleSerializer,
+)
 from .services import (
     PaymentGatewayError,
     create_paymongo_checkout_session,
     create_stripe_checkout_session,
 )
+
+logger = logging.getLogger('shop')
+
+
+def _api_error(message, *, status=400, code='bad_request', details=None):
+    payload = {'ok': False, 'error': message, 'code': code}
+    if details is not None:
+        payload['details'] = details
+    return JsonResponse(payload, status=status)
+
+
+def _api_ok(data=None, *, message='ok', status=200):
+    payload = {'ok': True, 'message': message, 'data': data or {}}
+    if data:
+        payload.update(data)
+    return JsonResponse(payload, status=status)
+
+
+def _serializer_error(serializer):
+    return _api_error('Validation error.', status=400, code='validation_error', details=serializer.errors)
+
+
+def _json_body(request):
+    try:
+        return json.loads(request.body.decode('utf-8')), None
+    except (ValueError, UnicodeDecodeError):
+        return None, _api_error('Invalid JSON payload.', status=400, code='invalid_json')
+
+
+def _client_ip(request):
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', 'unknown')
+
+
+def _rate_limit_exceeded(request, key, limit=20, window_seconds=60):
+    cache_key = f'rl:{key}:{_client_ip(request)}'
+    current = cache.get(cache_key, 0)
+    if current >= limit:
+        return True
+    cache.set(cache_key, current + 1, timeout=window_seconds)
+    return False
+
+
+def _issue_tokens_for_user(user):
+    refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
 def _build_product_payload(request, product, wishlist_ids=None, detail=False):
@@ -613,80 +677,109 @@ def auth_me(request):
 
 @require_POST
 def auth_register(request):
-    try:
-        payload = json.loads(request.body.decode('utf-8'))
-    except (ValueError, UnicodeDecodeError):
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    if _rate_limit_exceeded(request, 'auth_register', limit=8, window_seconds=60):
+        return _api_error('Too many registration attempts. Please try again later.', status=429, code='rate_limited')
 
-    username = str(payload.get('username', '')).strip()
-    email = str(payload.get('email', '')).strip()
-    password = str(payload.get('password', ''))
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = AuthRegisterSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    username = serializer.validated_data['username']
+    email = serializer.validated_data.get('email', '')
+    password = serializer.validated_data['password']
 
     if not username or not password:
-        return JsonResponse({'error': 'Username and password are required.'}, status=400)
+        return _api_error('Username and password are required.', status=400, code='validation_error')
     if len(password) < 8:
-        return JsonResponse({'error': 'Password must be at least 8 characters.'}, status=400)
+        return _api_error('Password must be at least 8 characters.', status=400, code='validation_error')
     if User.objects.filter(username=username).exists():
-        return JsonResponse({'error': 'Username already exists.'}, status=400)
+        return _api_error('Username already exists.', status=400, code='validation_error')
     if email and User.objects.filter(email=email).exists():
-        return JsonResponse({'error': 'Email already exists.'}, status=400)
+        return _api_error('Email already exists.', status=400, code='validation_error')
 
     user = User.objects.create_user(username=username, email=email, password=password)
     _get_or_create_profile(user)
     login(request, user)
-    return JsonResponse(
+    return _api_ok(
         {
-            'message': 'Registration successful.',
             'user': _serialize_user(user),
+            'tokens': _issue_tokens_for_user(user),
         },
+        message='Registration successful.',
         status=201,
     )
 
 
 @require_POST
 def auth_login(request):
-    try:
-        payload = json.loads(request.body.decode('utf-8'))
-    except (ValueError, UnicodeDecodeError):
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    if _rate_limit_exceeded(request, 'auth_login', limit=12, window_seconds=60):
+        return _api_error('Too many login attempts. Please try again later.', status=429, code='rate_limited')
 
-    username = str(payload.get('username', '')).strip()
-    password = str(payload.get('password', ''))
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = AuthLoginSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    username = serializer.validated_data['username']
+    password = serializer.validated_data['password']
 
     if not username or not password:
-        return JsonResponse({'error': 'Username and password are required.'}, status=400)
+        return _api_error('Username and password are required.', status=400, code='validation_error')
 
     user = authenticate(request, username=username, password=password)
     if not user:
-        return JsonResponse({'error': 'Invalid credentials.'}, status=401)
+        return _api_error('Invalid credentials.', status=401, code='auth_failed')
 
     login(request, user)
-    return JsonResponse(
+    return _api_ok(
         {
-            'message': 'Login successful.',
             'user': _serialize_user(user),
-        }
+            'tokens': _issue_tokens_for_user(user),
+        },
+        message='Login successful.',
     )
 
 
 @require_POST
 def auth_logout(request):
     logout(request)
-    return JsonResponse({'message': 'Logout successful.'})
+    return _api_ok(message='Logout successful.')
+
+
+@require_POST
+def auth_token_refresh(request):
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    refresh_token = _normalize_text(payload.get('refresh'))
+    if not refresh_token:
+        return _api_error('Refresh token is required.', status=400, code='validation_error')
+
+    try:
+        refresh = RefreshToken(refresh_token)
+        return _api_ok({'tokens': {'access': str(refresh.access_token)}}, message='Token refreshed.')
+    except Exception:
+        return _api_error('Invalid refresh token.', status=401, code='invalid_token')
 
 
 @ensure_csrf_cookie
 @require_GET
 def category_list(request):
+    cached = cache.get('api:categories')
+    if cached is not None:
+        return JsonResponse({'categories': cached})
+
     categories = Category.objects.all()
-    data = [
-        {
-            'id': category.id,
-            'name': category.name,
-            'slug': category.slug,
-        }
-        for category in categories
-    ]
+    data = [{'id': category.id, 'name': category.name, 'slug': category.slug} for category in categories]
+    cache.set('api:categories', data, timeout=300)
     return JsonResponse({'categories': data})
 
 
@@ -794,23 +887,40 @@ def product_detail_by_id(request, product_id):
 @require_POST
 @transaction.atomic
 def create_order(request):
-    try:
-        payload = json.loads(request.body.decode('utf-8'))
-    except (ValueError, UnicodeDecodeError):
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    if _rate_limit_exceeded(request, 'create_order', limit=20, window_seconds=60):
+        return _api_error('Too many order attempts. Please try again shortly.', status=429, code='rate_limited')
 
-    required_fields = ['full_name', 'email', 'phone', 'address', 'payment_method', 'items']
-    missing = [field for field in required_fields if field not in payload or not payload[field]]
-    if missing:
-        return JsonResponse({'error': f"Missing required fields: {', '.join(missing)}"}, status=400)
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
 
-    quote, error = _build_checkout_quote(payload, request.user)
+    idempotency_key = _normalize_text(request.headers.get('Idempotency-Key') or request.META.get('HTTP_IDEMPOTENCY_KEY'))
+    if idempotency_key:
+        existing_order = Order.objects.select_related('promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(idempotency_key=idempotency_key).first()
+        if existing_order:
+            logger.info('order_idempotency_replay key=%s order_id=%s', idempotency_key, existing_order.id)
+            return _api_ok(
+                {
+                    'order_id': existing_order.id,
+                    'tracking_number': existing_order.tracking_number,
+                    'payment_status': existing_order.payment_status,
+                    'payment_method': existing_order.payment_method,
+                    'status': existing_order.status,
+                    'redirect_url': existing_order.payment_checkout_url,
+                    'idempotency_replayed': True,
+                },
+                message='Order already processed.',
+            )
+
+    serializer = OrderCreateSerializer(data={**payload, 'idempotency_key': idempotency_key})
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    quote, error = _build_checkout_quote(serializer.validated_data, request.user)
     if error:
-        return JsonResponse({'error': error}, status=400)
+        return _api_error(error, status=400, code='validation_error')
 
-    payment_method = _normalize_text(payload.get('payment_method'))
-    if payment_method not in dict(Order.PAYMENT_METHOD_CHOICES):
-        return JsonResponse({'error': 'Unsupported payment method.'}, status=400)
+    payment_method = serializer.validated_data['payment_method']
 
     promo = quote['promo']
     if promo:
@@ -819,12 +929,12 @@ def create_order(request):
 
     order = Order.objects.create(
         user=request.user if request.user.is_authenticated else None,
-        full_name=_normalize_text(payload.get('full_name')),
-        email=_normalize_text(payload.get('email')),
-        phone=_normalize_text(payload.get('phone')),
-        address=_normalize_text(payload.get('address')),
+        full_name=serializer.validated_data['full_name'],
+        email=serializer.validated_data['email'],
+        phone=serializer.validated_data['phone'],
+        address=serializer.validated_data['address'],
         payment_method=payment_method,
-        notes=_normalize_text(payload.get('notes')),
+        notes=serializer.validated_data.get('notes', ''),
         subtotal_amount=quote['subtotal_amount'],
         shipping_fee=quote['shipping_fee'],
         discount_amount=quote['discount_amount'],
@@ -836,6 +946,7 @@ def create_order(request):
         estimated_delivery_date=timezone.localdate() + timedelta(days=quote['estimated_delivery_days']),
         payment_status=Order.PAYMENT_STATUS_PENDING,
         is_paid=False,
+        idempotency_key=idempotency_key or None,
     )
 
     gateway_items = []
@@ -861,7 +972,8 @@ def create_order(request):
     OrderStatusEvent.objects.create(order=order, status=Order.STATUS_PENDING, note='Order created.')
 
     if order.payment_method in [Order.PAYMENT_COD, Order.PAYMENT_BANK]:
-        return JsonResponse(
+        send_order_confirmation_email(order)
+        return _api_ok(
             {
                 'order_id': order.id,
                 'tracking_number': order.tracking_number,
@@ -879,6 +991,7 @@ def create_order(request):
                     'estimated_delivery_date': order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else '',
                 },
             },
+            message='Order created.',
             status=201,
         )
 
@@ -909,8 +1022,9 @@ def create_order(request):
     order.payment_reference = reference
     order.payment_checkout_url = checkout_url
     order.save(update_fields=['payment_reference', 'payment_checkout_url'])
+    send_order_confirmation_email(order)
 
-    return JsonResponse(
+    return _api_ok(
         {
             'order_id': order.id,
             'tracking_number': order.tracking_number,
@@ -928,6 +1042,7 @@ def create_order(request):
                 'estimated_delivery_date': order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else '',
             },
         },
+        message='Order created.',
         status=201,
     )
 
@@ -956,14 +1071,17 @@ def order_history(request):
 @ensure_csrf_cookie
 @require_POST
 def checkout_quote(request):
-    try:
-        payload = json.loads(request.body.decode('utf-8'))
-    except (ValueError, UnicodeDecodeError):
-        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
 
-    quote, error = _build_checkout_quote(payload, request.user)
+    serializer = CheckoutQuoteSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    quote, error = _build_checkout_quote(serializer.validated_data, request.user)
     if error:
-        return JsonResponse({'error': error}, status=400)
+        return _api_error(error, status=400, code='validation_error')
 
     return JsonResponse(
         {
@@ -1021,21 +1139,17 @@ def product_reviews_create(request, slug):
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
 
-    try:
-        rating = int(payload.get('rating', 0))
-    except (TypeError, ValueError):
-        return JsonResponse({'error': 'Rating must be a number.'}, status=400)
-
-    if rating < 1 or rating > 5:
-        return JsonResponse({'error': 'Rating must be between 1 and 5.'}, status=400)
+    serializer = ProductReviewCreateSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
 
     review, _created = ProductReview.objects.update_or_create(
         product=product,
         user=request.user,
         defaults={
-            'rating': rating,
-            'title': _normalize_text(payload.get('title')),
-            'comment': _normalize_text(payload.get('comment')),
+            'rating': serializer.validated_data['rating'],
+            'title': serializer.validated_data.get('title', ''),
+            'comment': serializer.validated_data.get('comment', ''),
             'is_approved': True,
         },
     )
@@ -1090,7 +1204,11 @@ def wishlist_toggle(request):
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
 
-    product_id = payload.get('product_id')
+    serializer = WishlistToggleSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    product_id = serializer.validated_data['product_id']
     product = Product.objects.filter(id=product_id, is_active=True).first()
     if not product:
         return JsonResponse({'error': 'Product not found.'}, status=404)
@@ -1109,28 +1227,36 @@ def wishlist_toggle(request):
 @ensure_csrf_cookie
 @require_GET
 def order_track(request):
-    tracking_number = _normalize_text(request.GET.get('tracking_number'))
-    order_id = _normalize_text(request.GET.get('order_id'))
-    email = _normalize_text(request.GET.get('email'))
+    if _rate_limit_exceeded(request, 'order_track', limit=40, window_seconds=60):
+        return _api_error('Too many tracking requests. Please try again shortly.', status=429, code='rate_limited')
+
+    serializer = TrackOrderSerializer(data={
+        'tracking_number': request.GET.get('tracking_number', ''),
+        'order_id': request.GET.get('order_id') or None,
+        'email': request.GET.get('email', ''),
+    })
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    tracking_number = serializer.validated_data.get('tracking_number', '')
+    order_id = serializer.validated_data.get('order_id')
+    email = serializer.validated_data.get('email', '')
 
     order = None
     if tracking_number:
         order = Order.objects.select_related('user', 'promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(tracking_number=tracking_number).first()
     elif order_id:
-        try:
-            order = Order.objects.select_related('user', 'promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(id=int(order_id)).first()
-        except (TypeError, ValueError):
-            return JsonResponse({'error': 'Invalid order ID.'}, status=400)
+        order = Order.objects.select_related('user', 'promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(id=order_id).first()
 
     if not order:
-        return JsonResponse({'error': 'Order not found.'}, status=404)
+        return _api_error('Order not found.', status=404, code='not_found')
 
     if request.user.is_authenticated:
         role = _get_user_role(request.user)
         if role not in {UserProfile.ROLE_OWNER, UserProfile.ROLE_ADMIN} and order.user_id and order.user_id != request.user.id:
-            return JsonResponse({'error': 'Permission denied.'}, status=403)
+            return _api_error('Permission denied.', status=403, code='forbidden')
     elif email and order.email.lower() != email.lower():
-        return JsonResponse({'error': 'Order email does not match.'}, status=403)
+        return _api_error('Order email does not match.', status=403, code='forbidden')
 
     return JsonResponse({'order': _serialize_order_detail(order)})
 
@@ -1235,9 +1361,11 @@ def admin_user_role(request, user_id):
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
 
-    role = _normalize_text(payload.get('role')).upper()
-    if role not in dict(UserProfile.ROLE_CHOICES):
-        return JsonResponse({'error': 'Unsupported role.'}, status=400)
+    serializer = AdminUserRoleSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    role = serializer.validated_data['role']
 
     user = User.objects.filter(id=user_id).first()
     if not user:
@@ -1262,10 +1390,12 @@ def admin_order_status(request, order_id):
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
 
-    status = _normalize_text(payload.get('status')).upper()
-    note = _normalize_text(payload.get('note'))
-    if status not in dict(Order.ORDER_STATUS_CHOICES):
-        return JsonResponse({'error': 'Unsupported status.'}, status=400)
+    serializer = AdminOrderStatusSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    status = serializer.validated_data['status']
+    note = serializer.validated_data.get('note', '')
 
     order = Order.objects.select_related('promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(id=order_id).first()
     if not order:
@@ -1282,5 +1412,54 @@ def admin_order_status(request, order_id):
     order.status = status
     order.save(update_fields=['status', 'payment_status', 'is_paid'])
     OrderStatusEvent.objects.create(order=order, status=status, note=note or f'Status updated to {status}.')
+    send_order_status_email(order, note=note)
 
     return JsonResponse({'message': 'Order status updated.', 'order': _serialize_order_detail(order)})
+
+
+@require_POST
+@transaction.atomic
+def payment_webhook(request):
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    serializer = PaymentWebhookSerializer(data=payload)
+    if not serializer.is_valid():
+        return _serializer_error(serializer)
+
+    provider = serializer.validated_data['provider']
+    event_type = serializer.validated_data['event_type']
+    order_id = serializer.validated_data.get('order_id')
+    payment_reference = serializer.validated_data.get('payment_reference', '')
+    note = serializer.validated_data.get('note', '')
+
+    order = None
+    if order_id:
+        order = Order.objects.select_related('promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(id=order_id).first()
+    if not order and payment_reference:
+        order = Order.objects.select_related('promo_code').prefetch_related('items__product', 'items__variant', 'status_events').filter(payment_reference=payment_reference).first()
+
+    if not order:
+        return _api_error('Order not found.', status=404, code='not_found')
+
+    normalized_event = event_type.lower()
+    if normalized_event in {'payment.paid', 'checkout.success', 'payment_succeeded'}:
+        order.payment_status = Order.PAYMENT_STATUS_PAID
+        order.is_paid = True
+        if order.status == Order.STATUS_PENDING:
+            order.status = Order.STATUS_CONFIRMED
+        order.save(update_fields=['payment_status', 'is_paid', 'status'])
+        OrderStatusEvent.objects.create(order=order, status=order.status, note=note or f'{provider} webhook confirmed payment.')
+        send_order_status_email(order, note=note or f'{provider} webhook confirmed payment.')
+        return _api_ok({'order': _serialize_order_detail(order)}, message='Webhook processed.')
+
+    if normalized_event in {'payment.failed', 'checkout.failed', 'payment_failed'}:
+        order.payment_status = Order.PAYMENT_STATUS_FAILED
+        order.status = Order.STATUS_CANCELLED
+        order.save(update_fields=['payment_status', 'status'])
+        OrderStatusEvent.objects.create(order=order, status=order.status, note=note or f'{provider} webhook reported failure.')
+        send_order_status_email(order, note=note or f'{provider} webhook reported failure.')
+        return _api_ok({'order': _serialize_order_detail(order)}, message='Webhook processed.')
+
+    return _api_ok({'order': _serialize_order_detail(order)}, message='Webhook ignored.')

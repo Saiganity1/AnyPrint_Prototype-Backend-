@@ -78,6 +78,11 @@ class Product(models.Model):
 
 	class Meta:
 		ordering = ['-is_featured', 'name']
+		indexes = [
+			models.Index(fields=['category', 'created_at']),
+			models.Index(fields=['is_active', 'is_featured']),
+			models.Index(fields=['price']),
+		]
 
 	def __str__(self):
 		return self.name
@@ -115,6 +120,10 @@ class ProductVariant(models.Model):
 
 	class Meta:
 		ordering = ['product__name', 'size', 'color']
+		indexes = [
+			models.Index(fields=['product', 'is_active']),
+			models.Index(fields=['sku']),
+		]
 		constraints = [
 			models.UniqueConstraint(fields=['product', 'size', 'color'], name='unique_product_variant')
 		]
@@ -145,6 +154,9 @@ class ProductReview(models.Model):
 
 	class Meta:
 		ordering = ['-created_at']
+		indexes = [
+			models.Index(fields=['product', 'is_approved', 'created_at']),
+		]
 		constraints = [
 			models.UniqueConstraint(fields=['product', 'user'], name='unique_product_review_per_user')
 		]
@@ -160,6 +172,9 @@ class WishlistItem(models.Model):
 
 	class Meta:
 		ordering = ['-created_at']
+		indexes = [
+			models.Index(fields=['user', 'created_at']),
+		]
 		constraints = [
 			models.UniqueConstraint(fields=['user', 'product'], name='unique_wishlist_item')
 		]
@@ -255,12 +270,18 @@ class Order(models.Model):
 	estimated_delivery_date = models.DateField(null=True, blank=True)
 	payment_status = models.CharField(max_length=10, choices=PAYMENT_STATUS_CHOICES, default=PAYMENT_STATUS_PENDING)
 	payment_reference = models.CharField(max_length=120, blank=True)
+	idempotency_key = models.CharField(max_length=80, blank=True, null=True, unique=True, db_index=True)
 	payment_checkout_url = models.URLField(blank=True)
 	is_paid = models.BooleanField(default=False)
 	created_at = models.DateTimeField(auto_now_add=True)
 
 	class Meta:
 		ordering = ['-created_at']
+		indexes = [
+			models.Index(fields=['user', 'created_at']),
+			models.Index(fields=['status', 'created_at']),
+			models.Index(fields=['payment_status', 'created_at']),
+		]
 
 	def __str__(self):
 		return f'Order #{self.id} - {self.full_name}'
@@ -282,6 +303,11 @@ class OrderItem(models.Model):
 	quantity = models.PositiveIntegerField(default=1)
 	unit_price = models.DecimalField(max_digits=10, decimal_places=2)
 
+	class Meta:
+		indexes = [
+			models.Index(fields=['order', 'product']),
+		]
+
 	@property
 	def subtotal(self):
 		return self.quantity * self.unit_price
@@ -299,6 +325,9 @@ class OrderStatusEvent(models.Model):
 
 	class Meta:
 		ordering = ['created_at']
+		indexes = [
+			models.Index(fields=['order', 'created_at']),
+		]
 
 	def __str__(self):
 		return f'Order #{self.order_id} -> {self.status}'

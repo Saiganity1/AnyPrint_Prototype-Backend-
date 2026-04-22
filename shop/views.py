@@ -8,6 +8,7 @@ from django.utils.text import slugify
 
 from .forms import CheckoutForm
 from .models import Category, Order, OrderItem, Product, ProductVariant
+from .notifications import send_order_status_email
 from .services import (
     PaymentGatewayError,
     create_paymongo_checkout_session,
@@ -289,6 +290,7 @@ def stripe_success(request, order_id):
     order.payment_status = Order.STATUS_PAID
     order.is_paid = True
     order.save(update_fields=['payment_status', 'is_paid'])
+    send_order_status_email(order, note='Stripe payment confirmed.')
     return redirect('shop:order_success', order_id=order.id)
 
 
@@ -298,6 +300,7 @@ def paymongo_success(request, order_id):
     order.payment_status = Order.STATUS_PAID
     order.is_paid = True
     order.save(update_fields=['payment_status', 'is_paid'])
+    send_order_status_email(order, note='PayMongo payment confirmed.')
     return redirect('shop:order_success', order_id=order.id)
 
 
