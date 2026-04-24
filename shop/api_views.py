@@ -20,7 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from .models import (
     Category,
@@ -108,6 +108,28 @@ def _rate_limit_exceeded(request, key, limit=20, window_seconds=60):
 def _issue_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+def _resolve_user_from_request(request):
+    if request.user.is_authenticated:
+        return request.user
+
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+
+    token = auth_header.split(' ', 1)[1].strip()
+    if not token:
+        return None
+
+    try:
+        access = AccessToken(token)
+        user_id = access.get('user_id')
+        if not user_id:
+            return None
+        return User.objects.filter(id=user_id).first()
+    except Exception:
+        return None
 
 
 def _build_product_payload(request, product, wishlist_ids=None, detail=False):
@@ -803,12 +825,13 @@ def health(request):
 @ensure_csrf_cookie
 @require_GET
 def auth_me(request):
-    if request.user.is_authenticated:
-        profile = _get_or_create_profile(request.user)
+    resolved_user = _resolve_user_from_request(request)
+    if resolved_user:
+        profile = _get_or_create_profile(resolved_user)
         return JsonResponse(
             {
                 'is_authenticated': True,
-                'user': _serialize_user(request.user),
+                'user': _serialize_user(resolved_user),
                 'role': profile.role,
             }
         )
