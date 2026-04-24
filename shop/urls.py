@@ -14,4 +14,5 @@ urlpatterns = [
     path('payment/stripe/success/<int:order_id>/', views.stripe_success, name='stripe_success'),
     path('payment/paymongo/success/<int:order_id>/', views.paymongo_success, name='paymongo_success'),
     path('payment/cancel/<int:order_id>/', views.payment_cancel, name='payment_cancel'),
+    path('track-order/', views.track_order, name='track_order'),
 ]

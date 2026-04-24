@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Order</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="track-order-container">
+        <h1>Track Your Order</h1>
+        <div class="order-status-tabs">
+            <button class="tab" data-status="all">All</button>
+            <button class="tab" data-status="unpaid">Unpaid</button>
+            <button class="tab" data-status="to-ship">To Ship</button>
+            <button class="tab" data-status="shipping">Shipping</button>
+            <button class="tab" data-status="completed">Completed</button>
+            <button class="tab" data-status="cancellation">Cancellation</button>
+            <button class="tab" data-status="return-refund">Return/Refund</button>
+        </div>
+        <div id="order-list">
+            <!-- Orders will be dynamically loaded here -->
+        </div>
+    </div>
+    <script src="/static/js/track_order.js"></script>
+</body>
+</html>
