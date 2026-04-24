@@ -18,7 +18,7 @@ from django.db.models import Avg, Count, Q, Sum
 from django.http import JsonResponse
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -816,6 +816,7 @@ def auth_me(request):
     return JsonResponse({'is_authenticated': False, 'user': None})
 
 
+@csrf_exempt
 @require_POST
 def auth_register(request):
     if _rate_limit_exceeded(request, 'auth_register', limit=8, window_seconds=60):
@@ -855,6 +856,7 @@ def auth_register(request):
     )
 
 
+@csrf_exempt
 @require_POST
 def auth_login(request):
     if _rate_limit_exceeded(request, 'auth_login', limit=12, window_seconds=60):
@@ -888,6 +890,7 @@ def auth_login(request):
     )
 
 
+@csrf_exempt
 @require_POST
 def auth_social_login(request):
     if _rate_limit_exceeded(request, 'auth_social_login', limit=20, window_seconds=60):
@@ -928,6 +931,7 @@ def auth_social_login(request):
     )
 
 
+@csrf_exempt
 @require_POST
 def auth_phone_request(request):
     if _rate_limit_exceeded(request, 'auth_phone_request', limit=10, window_seconds=60):
@@ -960,6 +964,7 @@ def auth_phone_request(request):
     return _api_ok(data, message='OTP sent.')
 
 
+@csrf_exempt
 @require_POST
 def auth_phone_verify(request):
     if _rate_limit_exceeded(request, 'auth_phone_verify', limit=20, window_seconds=60):
@@ -1042,12 +1047,14 @@ def auth_phone_verify(request):
     )
 
 
+@csrf_exempt
 @require_POST
 def auth_logout(request):
     logout(request)
     return _api_ok(message='Logout successful.')
 
 
+@csrf_exempt
 @require_POST
 def auth_token_refresh(request):
     payload, error_response = _json_body(request)
