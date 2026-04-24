@@ -1,7 +1,6 @@
 import logging
 import time
 
-from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
@@ -31,7 +30,8 @@ class JwtAuthMiddleware:
 
     def __call__(self, request):
         # Keep session-authenticated users unchanged; only fallback to bearer token.
-        if not getattr(request, 'user', None) or isinstance(request.user, AnonymousUser):
+        user = getattr(request, 'user', None)
+        if not user or not getattr(user, 'is_authenticated', False):
             auth_header = request.META.get('HTTP_AUTHORIZATION', '')
             if auth_header.startswith('Bearer '):
                 raw_token = auth_header.split(' ', 1)[1].strip()
