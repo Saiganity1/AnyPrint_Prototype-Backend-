@@ -17,6 +17,7 @@ from django.db import transaction
 from django.db.models import Avg, Count, Q, Sum
 from django.http import JsonResponse
 from django.urls import reverse
+from django.utils.text import slugify
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
@@ -568,6 +569,49 @@ def _require_roles(request, allowed_roles):
         return JsonResponse({'error': 'Permission denied.'}, status=403)
 
     return None
+
+
+def _unique_slug(model, source_text, *, fallback='item'):
+    base = slugify(_normalize_text(source_text)) or fallback
+    candidate = base
+    suffix = 2
+    while model.objects.filter(slug=candidate).exists():
+        candidate = f'{base}-{suffix}'
+        suffix += 1
+    return candidate
+
+
+def _resolve_category(raw_category):
+    category_text = _normalize_text(raw_category)
+    if not category_text:
+        return None
+
+    existing = Category.objects.filter(name__iexact=category_text).first()
+    if existing:
+        return existing
+
+    return Category.objects.create(
+        name=category_text,
+        slug=_unique_slug(Category, category_text, fallback='category'),
+    )
+
+
+def _set_product_stock_with_variants(product, target_stock):
+    active_variants = list(product.variants.filter(is_active=True).order_by('id'))
+    if not active_variants:
+        product.stock_quantity = max(int(target_stock), 0)
+        product.save(update_fields=['stock_quantity'])
+        return
+
+    total_stock = max(int(target_stock), 0)
+    base_stock = total_stock // len(active_variants)
+    remainder = total_stock % len(active_variants)
+
+    for index, variant in enumerate(active_variants):
+        variant.stock_quantity = base_stock + (1 if index < remainder else 0)
+        variant.save(update_fields=['stock_quantity'])
+
+    product.recalculate_stock(save=True)
 
 
 def _restore_order_stock(order):
@@ -1890,6 +1934,117 @@ def admin_product_delete(request, product_id):
     product.delete()
     
     return JsonResponse({'message': f'Product \"{product_name}\" deleted successfully.'})
+
+
+@csrf_exempt
+@require_POST
+@transaction.atomic
+def admin_product_create(request):
+    """Owner creates a product for the catalog."""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER})
+    if role_error:
+        return role_error
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    name = _normalize_text(payload.get('name'))
+    description = _normalize_text(payload.get('description'))
+    print_style = _normalize_text(payload.get('print_style')) or Product.PRINT_STYLE_CLASSIC
+    price = _parse_decimal(payload.get('price'), default=None)
+
+    try:
+        stock_quantity = int(payload.get('stock_quantity', 0))
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'stock_quantity must be a valid integer.'}, status=400)
+
+    if not name:
+        return JsonResponse({'error': 'Product name is required.'}, status=400)
+    if price is None or price <= 0:
+        return JsonResponse({'error': 'Price must be greater than 0.'}, status=400)
+    if stock_quantity < 0:
+        return JsonResponse({'error': 'stock_quantity must not be negative.'}, status=400)
+
+    allowed_styles = {choice[0] for choice in Product.PRINT_STYLE_CHOICES}
+    if print_style not in allowed_styles:
+        return JsonResponse({'error': f'print_style must be one of: {", ".join(sorted(allowed_styles))}.'}, status=400)
+
+    category = _resolve_category(payload.get('category'))
+    product = Product.objects.create(
+        name=name,
+        slug=_unique_slug(Product, name, fallback='product'),
+        category=category,
+        description=description,
+        price=price,
+        print_style=print_style,
+        stock_quantity=stock_quantity,
+        is_featured=bool(payload.get('is_featured', False)),
+        is_active=bool(payload.get('is_active', True)),
+    )
+
+    return JsonResponse(
+        {
+            'message': 'Product created successfully.',
+            'product': {
+                'id': product.id,
+                'name': product.name,
+                'slug': product.slug,
+                'category': product.category.name if product.category else None,
+                'price': _money_string(product.price),
+                'stock_quantity': product.stock_quantity,
+                'is_featured': product.is_featured,
+                'is_active': product.is_active,
+            },
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_POST
+@transaction.atomic
+def admin_product_restock(request, product_id):
+    """Owner restocks product inventory."""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER})
+    if role_error:
+        return role_error
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    product = Product.objects.filter(id=product_id).first()
+    if not product:
+        return JsonResponse({'error': 'Product not found.'}, status=404)
+
+    mode = _normalize_text(payload.get('mode')).lower() or 'increment'
+    if mode not in {'increment', 'set'}:
+        return JsonResponse({'error': 'mode must be either "increment" or "set".'}, status=400)
+
+    try:
+        quantity = int(payload.get('quantity', 0))
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'quantity must be a valid integer.'}, status=400)
+
+    if quantity < 0:
+        return JsonResponse({'error': 'quantity must not be negative.'}, status=400)
+
+    current_stock = int(product.stock_quantity or 0)
+    target_stock = quantity if mode == 'set' else (current_stock + quantity)
+    _set_product_stock_with_variants(product, target_stock)
+    product.refresh_from_db(fields=['stock_quantity'])
+
+    return JsonResponse(
+        {
+            'message': 'Stock updated successfully.',
+            'product': {
+                'id': product.id,
+                'name': product.name,
+                'stock_quantity': product.stock_quantity,
+            },
+        }
+    )
 
 
 @require_POST
