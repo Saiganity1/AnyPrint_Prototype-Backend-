@@ -446,6 +446,17 @@ def _wishlist_product_ids(user):
     return set(WishlistItem.objects.filter(user=user).values_list('product_id', flat=True))
 
 
+def _can_user_review_product(user, product):
+    if not user or not user.is_authenticated:
+        return False
+
+    return OrderItem.objects.filter(
+        order__user=user,
+        order__status=Order.STATUS_DELIVERED,
+        product=product,
+    ).exists()
+
+
 def _product_selection_lists(variants):
     sizes = []
     colors = []
@@ -484,6 +495,7 @@ def _serialize_product_payload(request, product, *, wishlist_ids=None, detail=Fa
     }
 
     if detail:
+        can_review = _can_user_review_product(request.user, product)
         reviews = [
             _serialize_review(review)
             for review in product.reviews.select_related('user').filter(is_approved=True).order_by('-created_at')[:12]
@@ -505,6 +517,8 @@ def _serialize_product_payload(request, product, *, wishlist_ids=None, detail=Fa
         ]
         payload.update(
             {
+                'can_review': can_review,
+                'can_review_reason': '' if can_review else 'Only customers with delivered orders can review this item.',
                 'reviews': reviews,
                 'related_products': related_products,
                 'frequently_bought_together': frequently_bought_together,
@@ -1506,6 +1520,9 @@ def product_reviews_create(request, slug):
     product = Product.objects.filter(is_active=True, slug=slug).first()
     if not product:
         return JsonResponse({'error': 'Product not found.'}, status=404)
+
+    if not _can_user_review_product(request.user, product):
+        return JsonResponse({'error': 'Only customers with delivered orders can review this item.'}, status=403)
 
     try:
         payload = json.loads(request.body.decode('utf-8'))
