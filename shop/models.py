@@ -1,4 +1,4 @@
-from django.conf import settings
+﻿from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import Sum
@@ -217,11 +217,13 @@ class Order(models.Model):
 	PAYMENT_PAYMONGO = 'PAYMONGO'
 	PAYMENT_STRIPE = 'STRIPE'
 	PAYMENT_BANK = 'BANK'
+	PAYMENT_PAYMAYA = 'PAYMAYA'
 	PAYMENT_METHOD_CHOICES = [
 		(PAYMENT_COD, 'Cash on Delivery'),
 		(PAYMENT_PAYMONGO, 'GCash / QR PH via PayMongo'),
 		(PAYMENT_STRIPE, 'Card via Stripe'),
 		(PAYMENT_BANK, 'Bank Transfer'),
+		(PAYMENT_PAYMAYA, 'Card / PayMaya via PayMaya'),
 	]
 
 	STATUS_PENDING = 'PENDING'
@@ -341,3 +343,20 @@ def create_user_profile(sender, instance, created, **kwargs):
 
 	role = UserProfile.ROLE_OWNER if instance.is_superuser else UserProfile.ROLE_ADMIN if instance.is_staff else UserProfile.ROLE_USER
 	UserProfile.objects.get_or_create(user=instance, defaults={'role': role})
+
+
+class SavedAddress(models.Model):
+    """User's saved delivery addresses"""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='saved_addresses', on_delete=models.CASCADE)
+    full_name = models.CharField(max_length=120)
+    phone = models.CharField(max_length=30)
+    address = models.TextField()
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-updated_at']
+
+    def __str__(self):
+        return f'{self.full_name} - {self.address[:50]}'

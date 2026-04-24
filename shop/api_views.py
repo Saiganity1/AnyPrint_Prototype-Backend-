@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import logging
 import re
@@ -29,6 +31,7 @@ from .models import (
     ProductReview,
     ProductVariant,
     PromoCode,
+    SavedAddress,
     UserProfile,
     WishlistItem,
 )
@@ -51,6 +54,7 @@ from .serializers import (
 from .services import (
     PaymentGatewayError,
     create_paymongo_checkout_session,
+    create_paymaya_checkout_session,
     create_stripe_checkout_session,
 )
 
@@ -1295,6 +1299,10 @@ def create_order(request):
             success_url = request.build_absolute_uri(reverse('shop:paymongo_success', args=[order.id]))
             cancel_url = request.build_absolute_uri(reverse('shop:payment_cancel', args=[order.id]))
             checkout_url, reference = create_paymongo_checkout_session(order, gateway_items, success_url, cancel_url)
+        elif order.payment_method == Order.PAYMENT_PAYMAYA:
+            success_url = request.build_absolute_uri(reverse('shop:paymaya_success', args=[order.id]))
+            cancel_url = request.build_absolute_uri(reverse('shop:payment_cancel', args=[order.id]))
+            checkout_url, reference = create_paymaya_checkout_session(order, gateway_items, success_url, cancel_url)
         else:
             _restore_order_stock(order)
             order.payment_status = Order.PAYMENT_STATUS_FAILED
@@ -1754,3 +1762,372 @@ def payment_webhook(request):
         return _api_ok({'order': _serialize_order_detail(order)}, message='Webhook processed.')
 
     return _api_ok({'order': _serialize_order_detail(order)}, message='Webhook ignored.')
+
+
+@require_GET
+def admin_orders(request):
+    """Get list of all orders for admin dashboard"""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER, UserProfile.ROLE_ADMIN})
+    if role_error:
+        return role_error
+    
+    page = request.GET.get('page', 1)
+    page_size = request.GET.get('page_size', 50)
+    
+    orders_qs = Order.objects.select_related('user', 'promo_code').order_by('-created_at')
+    
+    paginator = Paginator(orders_qs, page_size)
+    try:
+        orders_page = paginator.page(page)
+    except:
+        orders_page = paginator.page(1)
+    
+    orders = []
+    for order in orders_page:
+        orders.append({
+            'id': order.id,
+            'tracking_number': order.tracking_number,
+            'full_name': order.full_name,
+            'email': order.email,
+            'phone': order.phone,
+            'total_amount': str(order.total_amount),
+            'status': order.status,
+            'payment_status': order.payment_status,
+            'payment_method': order.payment_method,
+            'created_at': order.created_at.isoformat(),
+        })
+    
+    return JsonResponse({
+        'orders': orders,
+        'total': paginator.count,
+        'pages': paginator.num_pages,
+        'current_page': orders_page.number,
+    })
+
+
+@require_GET
+def admin_products(request):
+    """Get list of products for admin management"""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER, UserProfile.ROLE_ADMIN})
+    if role_error:
+        return role_error
+    
+    page = request.GET.get('page', 1)
+    page_size = request.GET.get('page_size', 100)
+    
+    products_qs = Product.objects.select_related('category').order_by('-created_at')
+    
+    paginator = Paginator(products_qs, page_size)
+    try:
+        products_page = paginator.page(page)
+    except:
+        products_page = paginator.page(1)
+    
+    products = []
+    for product in products_page:
+        products.append({
+            'id': product.id,
+            'name': product.name,
+            'slug': product.slug,
+            'category': product.category.name if product.category else None,
+            'price': str(product.price),
+            'stock_quantity': product.stock_quantity,
+            'is_featured': product.is_featured,
+            'is_active': product.is_active,
+        })
+    
+    return JsonResponse({
+        'products': products,
+        'total': paginator.count,
+        'pages': paginator.num_pages,
+        'current_page': products_page.number,
+    })
+
+
+@require_POST
+@transaction.atomic
+def admin_product_delete(request, product_id):
+    """Delete a product"""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER, UserProfile.ROLE_ADMIN})
+    if role_error:
+        return role_error
+    
+    product = Product.objects.filter(id=product_id).first()
+    if not product:
+        return JsonResponse({'error': 'Product not found.'}, status=404)
+    
+    product_name = product.name
+    product.delete()
+    
+    return JsonResponse({'message': f'Product \"{product_name}\" deleted successfully.'})
+
+
+@require_POST
+@transaction.atomic
+def admin_products_bulk_upload(request):
+    """Bulk upload products via CSV"""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER})
+    if role_error:
+        return role_error
+    
+    if 'file' not in request.FILES:
+        return JsonResponse({'error': 'No file provided.'}, status=400)
+    
+    csv_file = request.FILES['file']
+    if not csv_file.name.endswith('.csv'):
+        return JsonResponse({'error': 'Please upload a CSV file.'}, status=400)
+    
+    try:
+        file_content = csv_file.read().decode('utf-8')
+        csv_reader = csv.DictReader(io.StringIO(file_content))
+        
+        created = 0
+        updated = 0
+        errors = []
+        
+        for row_num, row in enumerate(csv_reader, start=2):
+            try:
+                category_name = row.get('category', '').strip()
+                category = None
+                if category_name:
+                    category, _ = Category.objects.get_or_create(name=category_name)
+                
+                product_data = {
+                    'description': row.get('description', ''),
+                    'price': Decimal(row.get('price', '0')),
+                    'stock_quantity': int(row.get('stock_quantity', '0')),
+                    'category': category,
+                    'is_featured': row.get('is_featured', 'false').lower() == 'true',
+                }
+                
+                product, was_created = Product.objects.update_or_create(
+                    name=row.get('name', '').strip(),
+                    defaults=product_data
+                )
+                
+                if was_created:
+                    created += 1
+                else:
+                    updated += 1
+            except Exception as e:
+                errors.append(f'Row {row_num}: {str(e)}')
+        
+        return JsonResponse({
+            'message': f'Imported {created} new products, updated {updated} existing products.',
+            'created': created,
+            'updated': updated,
+            'errors': errors[:10],
+        })
+    
+    except Exception as e:
+        return JsonResponse({'error': f'Failed to process CSV: {str(e)}'}, status=400)
+
+
+@require_GET
+def user_addresses(request):
+    """Get user's saved addresses"""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Authentication required.'}, status=401)
+    
+    addresses = SavedAddress.objects.filter(user=request.user).order_by('-is_default', '-updated_at')
+    
+    return JsonResponse({
+        'addresses': [
+            {
+                'id': addr.id,
+                'full_name': addr.full_name,
+                'phone': addr.phone,
+                'address': addr.address,
+                'is_default': addr.is_default,
+                'created_at': addr.created_at.isoformat(),
+            }
+            for addr in addresses
+        ]
+    })
+
+
+@require_POST
+@transaction.atomic
+def user_address_create(request):
+    """Create a new saved address"""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Authentication required.'}, status=401)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    
+    full_name = payload.get('full_name', '').strip()
+    phone = payload.get('phone', '').strip()
+    address = payload.get('address', '').strip()
+    is_default = payload.get('is_default', False)
+    
+    if not full_name or not phone or not address:
+        return JsonResponse({'error': 'Missing required fields: full_name, phone, address.'}, status=400)
+    
+    if is_default:
+        SavedAddress.objects.filter(user=request.user, is_default=True).update(is_default=False)
+    
+    addr = SavedAddress.objects.create(
+        user=request.user,
+        full_name=full_name,
+        phone=phone,
+        address=address,
+        is_default=is_default
+    )
+    
+    return JsonResponse({
+        'message': 'Address created successfully.',
+        'address': {
+            'id': addr.id,
+            'full_name': addr.full_name,
+            'phone': addr.phone,
+            'address': addr.address,
+            'is_default': addr.is_default,
+        }
+    })
+
+
+@require_POST
+@transaction.atomic
+def user_address_detail(request, address_id):
+    """Update a saved address"""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Authentication required.'}, status=401)
+    
+    addr = SavedAddress.objects.filter(id=address_id, user=request.user).first()
+    if not addr:
+        return JsonResponse({'error': 'Address not found.'}, status=404)
+    
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({'error': 'Invalid JSON payload.'}, status=400)
+    
+    if 'full_name' in payload:
+        addr.full_name = payload['full_name'].strip()
+    if 'phone' in payload:
+        addr.phone = payload['phone'].strip()
+    if 'address' in payload:
+        addr.address = payload['address'].strip()
+    if 'is_default' in payload:
+        if payload['is_default']:
+            SavedAddress.objects.filter(user=request.user, is_default=True).update(is_default=False)
+        addr.is_default = payload['is_default']
+    
+    addr.save()
+    
+    return JsonResponse({
+        'message': 'Address updated successfully.',
+        'address': {
+            'id': addr.id,
+            'full_name': addr.full_name,
+            'phone': addr.phone,
+            'address': addr.address,
+            'is_default': addr.is_default,
+        }
+    })
+
+
+@require_POST
+@transaction.atomic
+def user_address_delete(request, address_id):
+    """Delete a saved address"""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Authentication required.'}, status=401)
+    
+    addr = SavedAddress.objects.filter(id=address_id, user=request.user).first()
+    if not addr:
+        return JsonResponse({'error': 'Address not found.'}, status=404)
+    
+    addr.delete()
+    
+    return JsonResponse({'message': 'Address deleted successfully.'})
+
+
+@require_GET
+def admin_analytics(request):
+    """Get sales analytics and reports"""
+    role_error = _require_roles(request, {UserProfile.ROLE_OWNER, UserProfile.ROLE_ADMIN})
+    if role_error:
+        return role_error
+    
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+    
+    orders_qs = Order.objects.select_related('user', 'promo_code').prefetch_related('items__product')
+    
+    if date_from:
+        try:
+            date_from = timezone.datetime.fromisoformat(date_from).date()
+            orders_qs = orders_qs.filter(created_at__date__gte=date_from)
+        except:
+            pass
+    
+    if date_to:
+        try:
+            date_to = timezone.datetime.fromisoformat(date_to).date()
+            orders_qs = orders_qs.filter(created_at__date__lte=date_to)
+        except:
+            pass
+    
+    # Sales metrics
+    total_orders = orders_qs.count()
+    paid_orders = orders_qs.filter(is_paid=True).count()
+    total_revenue = orders_qs.filter(is_paid=True).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+    average_order_value = total_revenue / paid_orders if paid_orders > 0 else Decimal('0.00')
+    
+    # Payment method breakdown
+    payment_breakdown = list(
+        orders_qs.values('payment_method')
+        .annotate(count=Count('id'), total=Sum('total_amount'))
+        .order_by('-count')
+    )
+    
+    # Top products
+    top_products = list(
+        OrderItem.objects.filter(order__in=orders_qs)
+        .values('product_id', 'product__name', 'product__slug')
+        .annotate(quantity_sold=Sum('quantity'), revenue=Sum('subtotal'))
+        .order_by('-quantity_sold')[:10]
+    )
+    
+    # Order status breakdown
+    status_breakdown = list(
+        orders_qs.values('status')
+        .annotate(count=Count('id'))
+        .order_by('status')
+    )
+    
+    # Daily sales trend (last 30 days)
+    from django.db.models.functions import TruncDate
+    daily_sales = list(
+        orders_qs.filter(is_paid=True)
+        .annotate(date=TruncDate('created_at'))
+        .values('date')
+        .annotate(revenue=Sum('total_amount'), order_count=Count('id'))
+        .order_by('date')
+    )
+    
+    return JsonResponse({
+        'metrics': {
+            'total_orders': total_orders,
+            'paid_orders': paid_orders,
+            'total_revenue': str(total_revenue),
+            'average_order_value': str(average_order_value),
+            'pending_orders': orders_qs.filter(status=Order.STATUS_PENDING).count(),
+            'completed_orders': orders_qs.filter(status=Order.STATUS_DELIVERED).count(),
+        },
+        'payment_breakdown': payment_breakdown,
+        'status_breakdown': status_breakdown,
+        'top_products': top_products,
+        'daily_sales': [
+            {
+                'date': str(item['date']),
+                'revenue': str(item['revenue']),
+                'order_count': item['order_count'],
+            }
+            for item in daily_sales
+        ],
+    })

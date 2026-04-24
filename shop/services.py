@@ -63,7 +63,7 @@ def create_paymongo_checkout_session(order, cart_items, success_url, cancel_url)
                 'send_email_receipt': False,
                 'show_description': True,
                 'show_line_items': True,
-                'description': f'Thread Theory Order #{order.id}',
+                'description': f'AnyPrint Order #{order.id}',
                 'line_items': line_items,
                 'payment_method_types': ['gcash', 'card'],
                 'success_url': success_url,
@@ -90,3 +90,86 @@ def create_paymongo_checkout_session(order, cart_items, success_url, cancel_url)
     checkout_url = body['attributes']['checkout_url']
     checkout_id = body['id']
     return checkout_url, checkout_id
+
+
+def create_paymaya_checkout_session(order, cart_items, success_url, cancel_url):
+    """Create a PayMaya payment link for the order."""
+    if not settings.PAYMAYA_SECRET_KEY:
+        raise PaymentGatewayError('PayMaya is not configured. Add PAYMAYA_SECRET_KEY in environment.')
+
+    items = []
+    total_amount = 0
+    for item in cart_items:
+        item_total = item['product'].price * item['quantity']
+        items.append({
+            'name': item['product'].name,
+            'quantity': item['quantity'],
+            'price': float(item['product'].price),
+            'amount': float(item_total),
+        })
+        total_amount += item_total
+
+    payload = {
+        'totalAmount': {
+            'value': float(order.total_amount),
+            'currency': 'PHP',
+        },
+        'items': [{
+            'name': f'AnyPrint Order #{order.id}',
+            'quantity': 1,
+            'amount': {
+                'value': float(order.total_amount),
+                'currency': 'PHP',
+            }
+        }],
+        'buyer': {
+            'firstName': order.full_name.split()[0],
+            'lastName': ' '.join(order.full_name.split()[1:]) if len(order.full_name.split()) > 1 else '',
+            'contact': {
+                'email': order.email,
+                'phone': order.phone,
+            },
+        },
+        'metadata': {
+            'order_id': str(order.id),
+            'tracking_number': order.tracking_number,
+        },
+        'redirectUrl': {
+            'success': success_url,
+            'failure': cancel_url,
+            'cancel': cancel_url,
+        },
+        'requestReferenceNumber': order.tracking_number,
+    }
+
+    headers = {
+        'Authorization': f'Basic {settings.PAYMAYA_SECRET_KEY}',
+        'Content-Type': 'application/json',
+    }
+
+    try:
+        response = requests.post(
+            'https://pg.paymaya.com/api/v1/payment-links',
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        raise PaymentGatewayError(f'PayMaya request failed: {str(e)}')
+
+    if response.status_code >= 400:
+        try:
+            details = response.json()
+        except ValueError:
+            details = response.text
+        raise PaymentGatewayError(f'PayMaya checkout creation failed: {details}')
+
+    body = response.json()
+    checkout_url = body.get('redirectUrl')
+    checkout_id = body.get('id', '')
+    
+    if not checkout_url:
+        raise PaymentGatewayError('PayMaya response missing redirect URL')
+        
+    return checkout_url, checkout_id
+

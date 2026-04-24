@@ -43,6 +43,8 @@ ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '127.0.0.1,
 
 INSTALLED_APPS = [
     'corsheaders',
+    'rest_framework',
+    'rest_framework_simplejwt',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -162,11 +164,53 @@ EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
 STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
 PAYMONGO_SECRET_KEY = os.getenv('PAYMONGO_SECRET_KEY', '')
+PAYMAYA_PUBLIC_KEY = os.getenv('PAYMAYA_PUBLIC_KEY', '')
+PAYMAYA_SECRET_KEY = os.getenv('PAYMAYA_SECRET_KEY', '')
+
+# REST Framework & JWT Configuration
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 12,
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle'
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour'
+    }
+}
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
+    'UPDATE_LAST_LOGIN': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    'JTI_CLAIM': 'jti',
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
 
 # Frontend origins allowed to access backend APIs
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5500,http://localhost:5500').split(',')
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5500,http://localhost:5500,http://localhost:3000').split(',')
     if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
