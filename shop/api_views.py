@@ -1511,6 +1511,7 @@ def product_reviews(request, slug):
     return JsonResponse({'error': 'Unsupported method.'}, status=405)
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def product_reviews_create(request, slug):
