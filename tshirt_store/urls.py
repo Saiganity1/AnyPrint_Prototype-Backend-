@@ -17,12 +17,17 @@ Including another URLconf
 from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import JsonResponse
 from django.urls import include, path
 
+
+def root_ok(_request):
+    return JsonResponse({'ok': True, 'service': 'backend', 'api': '/api/'})
+
 urlpatterns = [
+    path('', root_ok, name='root_ok'),
     path('admin/', admin.site.urls),
     path('api/', include('shop.api_urls')),
-    path('', include('shop.urls')),
 ]
 
 if settings.DEBUG:
