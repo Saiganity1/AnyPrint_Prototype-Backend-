@@ -210,7 +210,7 @@ SIMPLE_JWT = {
 # Frontend origins allowed to access backend APIs
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5500,http://localhost:5500,http://localhost:3000').split(',')
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5500,http://localhost:5500,http://localhost:3000,https://anyprint-prototype-frontend.onrender.com,https://anyprint-prototype.onrender.com').split(',')
     if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
