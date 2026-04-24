@@ -217,7 +217,10 @@ CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+    for origin in os.getenv(
+        'CSRF_TRUSTED_ORIGINS',
+        'https://anyprint-prototype.onrender.com,https://anyprint-prototype-frontend.onrender.com',
+    ).split(',')
     if origin.strip()
 ]
 
