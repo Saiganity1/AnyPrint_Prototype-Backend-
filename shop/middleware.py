@@ -1,6 +1,10 @@
 import logging
 import time
 
+from django.contrib.auth.models import AnonymousUser
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+
 logger = logging.getLogger('shop')
 
 
@@ -18,3 +22,25 @@ class RequestTimingMiddleware:
 
         response['X-Response-Time-Ms'] = f'{elapsed_ms:.2f}'
         return response
+
+
+class JwtAuthMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.jwt = JWTAuthentication()
+
+    def __call__(self, request):
+        # Keep session-authenticated users unchanged; only fallback to bearer token.
+        if not getattr(request, 'user', None) or isinstance(request.user, AnonymousUser):
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            if auth_header.startswith('Bearer '):
+                raw_token = auth_header.split(' ', 1)[1].strip()
+                if raw_token:
+                    try:
+                        validated = self.jwt.get_validated_token(raw_token)
+                        request.user = self.jwt.get_user(validated)
+                    except (InvalidToken, TokenError, Exception):
+                        # Invalid tokens are handled by view-level auth checks.
+                        pass
+
+        return self.get_response(request)
