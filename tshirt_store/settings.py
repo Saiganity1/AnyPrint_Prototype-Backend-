@@ -208,21 +208,31 @@ SIMPLE_JWT = {
 }
 
 # Frontend origins allowed to access backend APIs
-CORS_ALLOWED_ORIGINS = [
+default_cors_origins = [
+    'http://127.0.0.1:5500',
+    'http://localhost:5500',
+    'http://localhost:3000',
+    'https://anyprint-prototype-frontend.onrender.com',
+    'https://anyprint-prototype.onrender.com',
+]
+env_cors_origins = [
     origin.strip()
-    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5500,http://localhost:5500,http://localhost:3000,https://anyprint-prototype-frontend.onrender.com,https://anyprint-prototype.onrender.com').split(',')
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
     if origin.strip()
 ]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(env_cors_origins + default_cors_origins))
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = [
+default_csrf_origins = [
+    'https://anyprint-prototype.onrender.com',
+    'https://anyprint-prototype-frontend.onrender.com',
+]
+env_csrf_origins = [
     origin.strip()
-    for origin in os.getenv(
-        'CSRF_TRUSTED_ORIGINS',
-        'https://anyprint-prototype.onrender.com,https://anyprint-prototype-frontend.onrender.com',
-    ).split(',')
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
     if origin.strip()
 ]
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(env_csrf_origins + default_csrf_origins))
 
 if not DEBUG:
     SESSION_COOKIE_SECURE = True
