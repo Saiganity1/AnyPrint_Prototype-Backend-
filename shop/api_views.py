@@ -1771,6 +1771,9 @@ def admin_user_role(request, user_id):
     return JsonResponse({'message': 'Role updated.', 'user': _serialize_user(user)})
 
 
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def admin_order_status(request, order_id):
