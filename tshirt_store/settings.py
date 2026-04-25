@@ -36,7 +36,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-only-change-me')
 RUNNING_TESTS = 'test' in sys.argv
 DEBUG = os.getenv('DEBUG', 'True' if RUNNING_TESTS else 'False') == 'True'
 
-ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost').split(',') if host.strip()]
+ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost,anyprint-prototype-backend.onrender.com,extraordinary-strudel-5a3d9e.netlify.app,*.netlify.app').split(',') if host.strip()]
 
 
 # Application definition
@@ -216,6 +216,8 @@ default_cors_origins = [
     'http://localhost:3000',
     'https://anyprint-prototype-frontend.onrender.com',
     'https://anyprint-prototype.onrender.com',
+    'https://extraordinary-strudel-5a3d9e.netlify.app',
+    'https://*.netlify.app',
 ]
 env_cors_origins = [
     origin.strip()
@@ -228,6 +230,8 @@ CORS_ALLOW_CREDENTIALS = True
 default_csrf_origins = [
     'https://anyprint-prototype.onrender.com',
     'https://anyprint-prototype-frontend.onrender.com',
+    'https://extraordinary-strudel-5a3d9e.netlify.app',
+    'https://*.netlify.app',
 ]
 env_csrf_origins = [
     origin.strip()
