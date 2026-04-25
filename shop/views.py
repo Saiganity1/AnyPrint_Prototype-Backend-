@@ -314,3 +314,9 @@ def payment_cancel(request, order_id):
 
     messages.warning(request, 'Payment was cancelled. Your reserved stock was released.')
     return redirect('shop:cart_detail')
+
+
+def track_order_page(request):
+    if not request.user.is_authenticated:
+        return redirect('login')
+    return render(request, 'track_order.html')
