@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import secrets
 from datetime import timedelta
@@ -10,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 import requests
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
+from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.conf import settings
 from django.core.paginator import EmptyPage, Paginator
@@ -1133,6 +1135,84 @@ def auth_phone_verify(request):
 def auth_logout(request):
     logout(request)
     return _api_ok(message='Logout successful.')
+
+
+@csrf_exempt
+@require_POST
+def password_reset_request(request):
+    """Request a password reset email."""
+    if _rate_limit_exceeded(request, 'password_reset_request', limit=3, window_seconds=300):
+        return _api_error('Too many reset attempts. Please try again later.', status=429, code='rate_limited')
+
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    email = payload.get('email', '').strip().lower()
+    if not email:
+        return _api_error('Email is required.', status=400, code='validation_error')
+
+    # Always return success to prevent email enumeration
+    # But actually send the reset email if user exists
+    user = User.objects.filter(email=email).first()
+    if user:
+        # Generate reset token
+        token = default_token_generator.make_token(user)
+        reset_link = f"{os.getenv('FRONTEND_URL', 'http://localhost:5500')}/reset-password.html?user_id={user.id}&token={token}"
+        
+        # Send reset email
+        subject = 'AnyPrint - Password Reset'
+        message = f'''Hi,
+
+You requested a password reset for your AnyPrint account.
+
+Click the link below to reset your password:
+{reset_link}
+
+If you didn't request this, please ignore this email.
+
+Note: This link will expire in 24 hours.
+'''
+        try:
+            from shop.notifications import _from_email
+            from django.core.mail import send_mail
+            send_mail(subject, message, _from_email(), [email], fail_silently=True)
+        except Exception:
+            pass  # Don't reveal email sending failures
+
+    return _api_ok(message='If an account with that email exists, a reset link has been sent.')
+
+
+@csrf_exempt
+@require_POST
+def password_reset_confirm(request):
+    """Confirm password reset with new password."""
+    payload, error_response = _json_body(request)
+    if error_response:
+        return error_response
+
+    user_id = payload.get('user_id')
+    token = payload.get('token')
+    new_password = payload.get('new_password')
+
+    if not all([user_id, token, new_password]):
+        return _api_error('User ID, token, and new password are required.', status=400, code='validation_error')
+
+    if len(new_password) < 8:
+        return _api_error('Password must be at least 8 characters.', status=400, code='validation_error')
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return _api_error('Invalid reset link.', status=400, code='invalid_token')
+
+    if not default_token_generator.check_token(user, token):
+        return _api_error('Invalid or expired reset link.', status=400, code='invalid_token')
+
+    user.set_password(new_password)
+    user.save(update_fields=['password'])
+
+    return _api_ok(message='Password reset successful. You can now login with your new password.')
 
 
 @csrf_exempt
