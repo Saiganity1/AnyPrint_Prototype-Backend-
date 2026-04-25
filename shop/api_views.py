@@ -2051,19 +2051,48 @@ def admin_product_create(request):
     if role_error:
         return role_error
 
-    payload, error_response = _json_body(request)
-    if error_response:
-        return error_response
+    # Check if this is a multipart form request (file upload)
+    content_type = request.headers.get('Content-Type', '')
+    
+    if 'multipart/form-data' in content_type:
+        # Handle multipart form data with file upload
+        name = request.POST.get('name', '').strip()
+        description = request.POST.get('description', '').strip()
+        print_style = request.POST.get('print_style', '').strip() or Product.PRINT_STYLE_CLASSIC
+        try:
+            price = _parse_decimal(request.POST.get('price'), default=None)
+        except (TypeError, ValueError):
+            return JsonResponse({'error': 'Price must be a valid number.'}, status=400)
+        try:
+            stock_quantity = int(request.POST.get('stock_quantity', 0))
+        except (TypeError, ValueError):
+            return JsonResponse({'error': 'stock_quantity must be a valid integer.'}, status=400)
+        category_name = request.POST.get('category', '').strip()
+        is_featured = request.POST.get('is_featured') in ('on', 'true', 'True')
+        is_active = request.POST.get('is_active', 'true').lower() in ('on', 'true', 'True')
+        
+        # Handle image upload
+        image = request.FILES.get('image')
+    else:
+        # Handle JSON request
+        payload, error_response = _json_body(request)
+        if error_response:
+            return error_response
 
-    name = _normalize_text(payload.get('name'))
-    description = _normalize_text(payload.get('description'))
-    print_style = _normalize_text(payload.get('print_style')) or Product.PRINT_STYLE_CLASSIC
-    price = _parse_decimal(payload.get('price'), default=None)
+        name = _normalize_text(payload.get('name'))
+        description = _normalize_text(payload.get('description'))
+        print_style = _normalize_text(payload.get('print_style')) or Product.PRINT_STYLE_CLASSIC
+        price = _parse_decimal(payload.get('price'), default=None)
 
-    try:
-        stock_quantity = int(payload.get('stock_quantity', 0))
-    except (TypeError, ValueError):
-        return JsonResponse({'error': 'stock_quantity must be a valid integer.'}, status=400)
+        try:
+            stock_quantity = int(payload.get('stock_quantity', 0))
+        except (TypeError, ValueError):
+            return JsonResponse({'error': 'stock_quantity must be a valid integer.'}, status=400)
+
+        category_name = payload.get('category', '')
+        is_featured = bool(payload.get('is_featured', False))
+        is_active = bool(payload.get('is_active', True))
+        image = None
 
     if not name:
         return JsonResponse({'error': 'Product name is required.'}, status=400)
@@ -2076,7 +2105,7 @@ def admin_product_create(request):
     if print_style not in allowed_styles:
         return JsonResponse({'error': f'print_style must be one of: {", ".join(sorted(allowed_styles))}.'}, status=400)
 
-    category = _resolve_category(payload.get('category'))
+    category = _resolve_category(category_name)
     product = Product.objects.create(
         name=name,
         slug=_unique_slug(Product, name, fallback='product'),
@@ -2085,8 +2114,9 @@ def admin_product_create(request):
         price=price,
         print_style=print_style,
         stock_quantity=stock_quantity,
-        is_featured=bool(payload.get('is_featured', False)),
-        is_active=bool(payload.get('is_active', True)),
+        is_featured=is_featured,
+        is_active=is_active,
+        image=image,
     )
 
     return JsonResponse(
@@ -2101,6 +2131,7 @@ def admin_product_create(request):
                 'stock_quantity': product.stock_quantity,
                 'is_featured': product.is_featured,
                 'is_active': product.is_active,
+                'image': request.build_absolute_uri(product.image.url) if product.image else None,
             },
         },
         status=201,
