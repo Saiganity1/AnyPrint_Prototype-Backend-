@@ -1267,6 +1267,7 @@ def product_detail_by_id(request, product_id):
     return JsonResponse({'product': _build_product_payload(request, product, wishlist_ids=wishlist_ids, detail=True)})
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def create_order(request):
@@ -1455,6 +1456,7 @@ def order_history(request):
     )
 
 
+@csrf_exempt
 @ensure_csrf_cookie
 @require_POST
 def checkout_quote(request):
@@ -2149,6 +2151,7 @@ def user_addresses(request):
     })
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def user_address_create(request):
@@ -2192,6 +2195,7 @@ def user_address_create(request):
     })
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def user_address_detail(request, address_id):
@@ -2233,6 +2237,7 @@ def user_address_detail(request, address_id):
     })
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def user_address_delete(request, address_id):
