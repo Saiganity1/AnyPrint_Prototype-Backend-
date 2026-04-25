@@ -1742,6 +1742,7 @@ def admin_users(request):
     return JsonResponse({'users': data})
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def admin_user_role(request, user_id):
@@ -1813,6 +1814,7 @@ def admin_order_status(request, order_id):
     return JsonResponse({'message': 'Order status updated.', 'order': _serialize_order_detail(order)})
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def payment_webhook(request):
@@ -1941,6 +1943,7 @@ def admin_products(request):
     })
 
 
+@csrf_exempt
 @require_POST
 @transaction.atomic
 def admin_product_delete(request, product_id):
