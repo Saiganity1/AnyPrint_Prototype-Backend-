@@ -13,6 +13,21 @@ const { notFound, errorHandler } = require('./src/middleware/errorMiddleware');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = new Set(
+  [
+    process.env.CLIENT_ORIGIN,
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+    'https://anyprint-frontend.onrender.com',
+    'https://anyprint-prototype.onrender.com',
+  ]
+    .flatMap((origin) => String(origin || '').split(','))
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+
 const requiredEnv = ['JWT_SECRET'];
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
 
@@ -23,7 +38,20 @@ if (missingEnv.length > 0) {
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(',').map((origin) => origin.trim()) : true,
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`CORS origin not allowed: ${origin}`));
+    },
+    credentials: true,
   })
 );
 app.use(express.json({ limit: '1mb' }));
