@@ -23,11 +23,7 @@ const upsertAccount = async ({ name, email, password, role }) => {
   const existing = await User.findOne({ email: normalizedEmail });
 
   if (existing) {
-    existing.name = name;
-    existing.role = role;
-    existing.password = password;
-    await existing.save();
-    console.log(`Updated ${role} account: ${existing.email}`);
+    console.log(`${role} account already exists: ${existing.email}`);
     return;
   }
 
@@ -42,19 +38,22 @@ const upsertAccount = async ({ name, email, password, role }) => {
 };
 
 const seedAccounts = async () => {
-  await connectDB();
-
   for (const account of accounts) {
     await upsertAccount(account);
   }
 };
 
-seedAccounts()
-  .catch((error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    const mongoose = require('mongoose');
-    await mongoose.disconnect();
-  });
+if (require.main === module) {
+  connectDB()
+    .then(seedAccounts)
+    .catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      const mongoose = require('mongoose');
+      await mongoose.disconnect();
+    });
+}
+
+module.exports = seedAccounts;

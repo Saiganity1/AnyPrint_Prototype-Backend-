@@ -8,6 +8,7 @@ const connectDB = require('./src/config/db');
 const authRoutes = require('./src/routes/authRoutes');
 const productRoutes = require('./src/routes/productRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
+const seedAccounts = require('./scripts/seedAccounts');
 const { notFound, errorHandler } = require('./src/middleware/errorMiddleware');
 
 const app = express();
@@ -93,6 +94,7 @@ app.use(errorHandler);
 const startServer = async () => {
   try {
     await connectDB();
+    await seedAccounts();
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
