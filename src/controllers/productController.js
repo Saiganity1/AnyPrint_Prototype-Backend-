@@ -24,6 +24,24 @@ const fileToDataUrl = (file) => {
   return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
 };
 
+const fileListToDataUrls = (files = []) => files.map(fileToDataUrl).filter(Boolean);
+
+const parseJsonField = (value, fallback = null) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  return fallback;
+};
+
 const getProducts = asyncHandler(async (req, res) => {
   const products = await Product.find().sort({ createdAt: -1 });
   res.json(products);
@@ -44,7 +62,24 @@ const createProduct = asyncHandler(async (req, res) => {
   const { name, description, price, stock } = req.body;
   const sizes = normalizeArrayField(req.body.sizes);
   const colors = normalizeArrayField(req.body.colors);
-  const imageUrl = fileToDataUrl(req.file) || String(req.body.imageUrl || '').trim();
+  const variantsInput = parseJsonField(req.body.variants, []);
+  const variants = Array.isArray(variantsInput)
+    ? variantsInput
+        .map((variant) => ({
+          size: String(variant?.size || '').trim(),
+          color: String(variant?.color || '').trim(),
+          stock: Number(variant?.stock || 0),
+        }))
+        .filter((variant) => variant.size || variant.color)
+    : [];
+  const uploadedImages = fileListToDataUrls(req.files || []);
+  const fallbackImageUrl = fileToDataUrl(req.file) || String(req.body.imageUrl || '').trim();
+  const images = uploadedImages.length ? uploadedImages : fallbackImageUrl ? [fallbackImageUrl] : [];
+  const imageUrl = images[0] || fallbackImageUrl;
+  const totalVariantStock = variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+  const totalStock = variants.length ? totalVariantStock : Number(stock ?? 0);
+  const resolvedSizes = sizes.length ? sizes : [...new Set(variants.map((variant) => variant.size).filter(Boolean))];
+  const resolvedColors = colors.length ? colors : [...new Set(variants.map((variant) => variant.color).filter(Boolean))];
 
   if (!name || !description || price === undefined || !imageUrl) {
     res.status(400);
@@ -55,10 +90,12 @@ const createProduct = asyncHandler(async (req, res) => {
     name,
     description,
     price: Number(price),
-    sizes,
-    colors,
-    stock: Number(stock ?? 0),
+    sizes: resolvedSizes,
+    colors: resolvedColors,
+    variants,
+    stock: totalStock,
     imageUrl,
+    images,
   });
 
   res.status(201).json(product);
@@ -83,9 +120,32 @@ const updateProduct = asyncHandler(async (req, res) => {
     update.stock = Number(update.stock);
   }
 
-  const uploadedImageUrl = fileToDataUrl(req.file);
-  if (uploadedImageUrl) {
-    update.imageUrl = uploadedImageUrl;
+  if (update.variants !== undefined) {
+    const parsedVariants = parseJsonField(update.variants, []);
+    update.variants = Array.isArray(parsedVariants)
+      ? parsedVariants
+          .map((variant) => ({
+            size: String(variant?.size || '').trim(),
+            color: String(variant?.color || '').trim(),
+            stock: Number(variant?.stock || 0),
+          }))
+          .filter((variant) => variant.size || variant.color)
+      : [];
+    if (update.stock === undefined) {
+      update.stock = update.variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+    }
+  }
+
+  const uploadedImages = fileListToDataUrls(req.files || []);
+  if (uploadedImages.length) {
+    update.images = uploadedImages;
+    update.imageUrl = uploadedImages[0];
+  } else {
+    const uploadedImageUrl = fileToDataUrl(req.file);
+    if (uploadedImageUrl) {
+      update.imageUrl = uploadedImageUrl;
+      update.images = [uploadedImageUrl];
+    }
   }
 
   const product = await Product.findByIdAndUpdate(req.params.id, update, {

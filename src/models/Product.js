@@ -25,6 +25,26 @@ const productSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    variants: {
+      type: [
+        {
+          size: {
+            type: String,
+            trim: true,
+          },
+          color: {
+            type: String,
+            trim: true,
+          },
+          stock: {
+            type: Number,
+            default: 0,
+            min: [0, 'Variant stock cannot be negative'],
+          },
+        },
+      ],
+      default: [],
+    },
     stock: {
       type: Number,
       required: [true, 'Stock is required'],
@@ -35,6 +55,10 @@ const productSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Image URL is required'],
       trim: true,
+    },
+    images: {
+      type: [String],
+      default: [],
     },
   },
   {
