@@ -9,6 +9,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "create-owner": "node scripts/createOwner.js",
+    "seed:accounts": "node scripts/seedAccounts.js",
     "seed:products": "node scripts/seedProducts.js"
   },
   "dependencies": {

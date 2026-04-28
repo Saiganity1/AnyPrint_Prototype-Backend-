@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.post('/', protect, authorizeRoles('user', 'owner'), createOrder);
 router.get('/me', protect, authorizeRoles('user', 'owner'), getMyOrders);
-router.get('/', protect, authorizeRoles('staff', 'owner'), getAllOrders);
-router.put('/:id', protect, authorizeRoles('staff', 'owner'), updateOrder);
+router.get('/', protect, authorizeRoles('admin', 'staff', 'owner'), getAllOrders);
+router.put('/:id', protect, authorizeRoles('admin', 'staff', 'owner'), updateOrder);
 
 module.exports = router;
