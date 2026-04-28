@@ -42,6 +42,23 @@ const parseJsonField = (value, fallback = null) => {
   return fallback;
 };
 
+const normalizeVariantRows = (value) => {
+  const parsed = parseJsonField(value, []);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed
+    .map((variant) => ({
+      size: String(variant?.size || '').trim(),
+      color: String(variant?.color || '').trim(),
+      stock: Number(variant?.stock || 0),
+    }))
+    .filter((variant) => variant.size || variant.color);
+};
+
+const uniqueFieldValues = (variants, key) => [...new Set(variants.map((variant) => variant[key]).filter(Boolean))];
+
 const getProducts = asyncHandler(async (req, res) => {
   const products = await Product.find().sort({ createdAt: -1 });
   res.json(products);
@@ -62,24 +79,15 @@ const createProduct = asyncHandler(async (req, res) => {
   const { name, description, price, stock } = req.body;
   const sizes = normalizeArrayField(req.body.sizes);
   const colors = normalizeArrayField(req.body.colors);
-  const variantsInput = parseJsonField(req.body.variants, []);
-  const variants = Array.isArray(variantsInput)
-    ? variantsInput
-        .map((variant) => ({
-          size: String(variant?.size || '').trim(),
-          color: String(variant?.color || '').trim(),
-          stock: Number(variant?.stock || 0),
-        }))
-        .filter((variant) => variant.size || variant.color)
-    : [];
+  const variants = normalizeVariantRows(req.body.variants);
   const uploadedImages = fileListToDataUrls(req.files || []);
   const fallbackImageUrl = fileToDataUrl(req.file) || String(req.body.imageUrl || '').trim();
   const images = uploadedImages.length ? uploadedImages : fallbackImageUrl ? [fallbackImageUrl] : [];
   const imageUrl = images[0] || fallbackImageUrl;
   const totalVariantStock = variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
   const totalStock = variants.length ? totalVariantStock : Number(stock ?? 0);
-  const resolvedSizes = sizes.length ? sizes : [...new Set(variants.map((variant) => variant.size).filter(Boolean))];
-  const resolvedColors = colors.length ? colors : [...new Set(variants.map((variant) => variant.color).filter(Boolean))];
+  const resolvedSizes = sizes.length ? sizes : uniqueFieldValues(variants, 'size');
+  const resolvedColors = colors.length ? colors : uniqueFieldValues(variants, 'color');
 
   if (!name || !description || price === undefined || !imageUrl) {
     res.status(400);
@@ -121,18 +129,15 @@ const updateProduct = asyncHandler(async (req, res) => {
   }
 
   if (update.variants !== undefined) {
-    const parsedVariants = parseJsonField(update.variants, []);
-    update.variants = Array.isArray(parsedVariants)
-      ? parsedVariants
-          .map((variant) => ({
-            size: String(variant?.size || '').trim(),
-            color: String(variant?.color || '').trim(),
-            stock: Number(variant?.stock || 0),
-          }))
-          .filter((variant) => variant.size || variant.color)
-      : [];
+    update.variants = normalizeVariantRows(update.variants);
     if (update.stock === undefined) {
       update.stock = update.variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
+    }
+    if (update.sizes === undefined) {
+      update.sizes = uniqueFieldValues(update.variants, 'size');
+    }
+    if (update.colors === undefined) {
+      update.colors = uniqueFieldValues(update.variants, 'color');
     }
   }
 
