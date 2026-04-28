@@ -28,6 +28,26 @@ const allowedOrigins = new Set(
     .filter(Boolean)
 );
 
+const isAllowedOrigin = (origin) => {
+  if (!origin) {
+    return true;
+  }
+
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+
+  if (/^https:\/\/.*\.onrender\.com$/i.test(origin)) {
+    return true;
+  }
+
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+    return true;
+  }
+
+  return false;
+};
+
 const requiredEnv = ['JWT_SECRET'];
 const missingEnv = requiredEnv.filter((key) => !process.env[key]);
 
@@ -39,12 +59,7 @@ app.use(helmet());
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-
-      if (allowedOrigins.has(origin)) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
         return;
       }
