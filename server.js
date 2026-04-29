@@ -8,6 +8,7 @@ const connectDB = require('./src/config/db');
 const authRoutes = require('./src/routes/authRoutes');
 const productRoutes = require('./src/routes/productRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
+const trackingRoutes = require('./src/routes/trackingRoutes');
 const seedAccounts = require('./scripts/seedAccounts');
 const { notFound, errorHandler } = require('./src/middleware/errorMiddleware');
 
@@ -87,6 +88,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/tracking', trackingRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

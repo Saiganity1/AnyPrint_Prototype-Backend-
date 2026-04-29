@@ -54,8 +54,24 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'paid', 'shipped', 'completed', 'cancelled'],
+      enum: ['pending', 'packing', 'shipped', 'delivering', 'delivered', 'rate', 'cancelled'],
       default: 'pending',
+    },
+    tracking_number: {
+      type: String,
+      trim: true,
+    },
+    tracking_provider: {
+      type: String,
+      default: 'jnt',
+    },
+    tracking_status: {
+      type: String,
+      default: null,
+    },
+    ai_last_checked: {
+      type: Date,
+      default: null,
     },
   },
   {
