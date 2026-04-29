@@ -11,12 +11,14 @@ const authRoutes = require('./src/routes/authRoutes');
 const productRoutes = require('./src/routes/productRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
 const trackingRoutes = require('./src/routes/trackingRoutes');
+const chatRoutes = require('./src/routes/chatRoutes');
 const seedAccounts = require('./scripts/seedAccounts');
 const { notFound, errorHandler } = require('./src/middleware/errorMiddleware');
 const Order = require('./src/models/Order');
 const { fetchJNTStatusViaGemini, mapJNTStatusToOrderStatus } = require('./src/services/trackingService');
 
 const app = express();
+const http = require('http');
 const PORT = process.env.PORT || 5000;
 
 const allowedOrigins = new Set(
@@ -95,6 +97,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/tracking', trackingRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
@@ -158,7 +161,18 @@ const startServer = async () => {
     // Schedule automatic tracking updates
     await scheduleAutomaticTrackingUpdates();
 
-    app.listen(PORT, () => {
+    const server = http.createServer(app);
+
+    // Initialize socket.io
+    try {
+      const socket = require('./src/socket');
+      socket.init(server);
+      console.log('Socket.IO initialized');
+    } catch (err) {
+      console.warn('Socket.IO initialization failed:', err.message);
+    }
+
+    server.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
   } catch (error) {
