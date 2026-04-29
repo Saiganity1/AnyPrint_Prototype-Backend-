@@ -60,7 +60,28 @@ const normalizeVariantRows = (value) => {
 const uniqueFieldValues = (variants, key) => [...new Set(variants.map((variant) => variant[key]).filter(Boolean))];
 
 const getProducts = asyncHandler(async (req, res) => {
-  const products = await Product.find().sort({ createdAt: -1 });
+  // Simple pagination + search + lightweight projection to speed up responses
+  const pageSize = Math.min(Math.max(Number(req.query.page_size) || 20, 1), 200);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+
+  const q = {};
+  if (req.query.search && String(req.query.search).trim()) {
+    const needle = String(req.query.search).trim();
+    q.$or = [
+      { name: { $regex: needle, $options: 'i' } },
+      { description: { $regex: needle, $options: 'i' } },
+      { category: { $regex: needle, $options: 'i' } },
+    ];
+  }
+
+  const products = await Product.find(q)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * pageSize)
+    .limit(pageSize)
+    .select('name price imageUrl category description createdAt');
+
+  // cache short-lived on CDN/browser
+  res.set('Cache-Control', 'public, max-age=60, s-maxage=120');
   res.json(products);
 });
 

@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -65,6 +66,8 @@ if (missingEnv.length > 0) {
 }
 
 app.use(helmet());
+// gzip compression for responses
+app.use(compression());
 app.use(
   cors({
     origin(origin, callback) {
