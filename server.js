@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const cron = require('node-cron');
 require('dotenv').config();
 
 const connectDB = require('./src/config/db');
@@ -11,6 +12,8 @@ const orderRoutes = require('./src/routes/orderRoutes');
 const trackingRoutes = require('./src/routes/trackingRoutes');
 const seedAccounts = require('./scripts/seedAccounts');
 const { notFound, errorHandler } = require('./src/middleware/errorMiddleware');
+const Order = require('./src/models/Order');
+const { fetchJNTStatusViaGemini, mapJNTStatusToOrderStatus } = require('./src/services/trackingService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -93,10 +96,65 @@ app.use('/api/tracking', trackingRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+/**
+ * Automatic tracking status check via Gemini AI
+ * Runs every hour to check all orders with JNT tracking numbers
+ */
+async function scheduleAutomaticTrackingUpdates() {
+  console.log('📅 Scheduling automatic JNT tracking updates (every hour)...');
+
+  cron.schedule('0 * * * *', async () => {
+    console.log(`[Cron] Running automatic tracking check at ${new Date().toISOString()}`);
+
+    try {
+      const orders = await Order.find({
+        tracking_number: { $exists: true, $ne: null },
+        status: { $nin: ['delivered', 'cancelled', 'rate'] },
+      });
+
+      if (orders.length === 0) {
+        console.log('[Cron] No active orders with tracking numbers to check');
+        return;
+      }
+
+      let updated = 0;
+      let failed = 0;
+
+      for (const order of orders) {
+        try {
+          const trackingData = await fetchJNTStatusViaGemini(order.tracking_number);
+          const newStatus = mapJNTStatusToOrderStatus(trackingData.current_status);
+
+          order.status = newStatus;
+          order.tracking_status = trackingData.status_message;
+          order.ai_last_checked = new Date();
+          await order.save();
+
+          console.log(`[Cron] ✓ Order ${order._id}: updated to '${newStatus}'`);
+          updated++;
+        } catch (err) {
+          console.error(`[Cron] ✗ Order ${order._id}: ${err.message}`);
+          failed++;
+        }
+      }
+
+      console.log(
+        `[Cron] Tracking check complete: ${updated} updated, ${failed} failed out of ${orders.length} orders`
+      );
+    } catch (err) {
+      console.error('[Cron] Automatic tracking check failed:', err.message);
+    }
+  });
+}
+
 const startServer = async () => {
   try {
     await connectDB();
     await seedAccounts();
+
+    // Schedule automatic tracking updates
+    await scheduleAutomaticTrackingUpdates();
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
