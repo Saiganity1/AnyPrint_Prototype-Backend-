@@ -9,10 +9,21 @@ try {
   io = null;
 }
 
+const MANAGER_ROLES = new Set(['admin', 'owner', 'staff']);
+
+function normalizeRole(role) {
+  return String(role || '').toLowerCase();
+}
+
+function isManagerRole(role) {
+  return MANAGER_ROLES.has(normalizeRole(role));
+}
+
 // Send a message
 exports.sendMessage = asyncHandler(async (req, res) => {
   const { recipient_id, content } = req.body;
   const sender_id = req.user.id;
+  const sender_role = normalizeRole(req.user.role);
 
   if (!recipient_id || !content || !content.trim()) {
     return res.status(400).json({ error: 'Recipient and message content are required' });
@@ -22,6 +33,26 @@ exports.sendMessage = asyncHandler(async (req, res) => {
   const recipient = await User.findById(recipient_id);
   if (!recipient) {
     return res.status(404).json({ error: 'Recipient not found' });
+  }
+
+  if (sender_role === 'user') {
+    if (!isManagerRole(recipient.role)) {
+      return res.status(403).json({ error: 'Users can only message admin or owner accounts' });
+    }
+  } else if (isManagerRole(req.user.role)) {
+    if (normalizeRole(recipient.role) !== 'user') {
+      return res.status(403).json({ error: 'Managers can only reply to users' });
+    }
+
+    const existingConversation = await Message.exists({
+      conversation_id: [sender_id.toString(), recipient_id.toString()].sort().join('_'),
+    });
+
+    if (!existingConversation) {
+      return res.status(403).json({ error: 'Managers can only reply after a user starts the conversation' });
+    }
+  } else {
+    return res.status(403).json({ error: 'Unsupported chat role' });
   }
 
   // Create conversation ID (consistent regardless of order)
