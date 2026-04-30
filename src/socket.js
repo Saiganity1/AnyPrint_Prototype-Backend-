@@ -43,28 +43,29 @@ module.exports = {
     });
 
     io.on('connection', (socket) => {
-      console.log(`Socket.IO client connected: ${socket.id}`);
+      console.log(`[Socket.IO Backend] Client connected: ${socket.id}`);
       
       socket.on('join', (room) => {
         if (room) {
           socket.join(room);
-          console.log(`Socket ${socket.id} joined room: ${room}`);
+          const roomSockets = io.sockets.adapter.rooms.get(room);
+          console.log(`[Socket.IO Backend] Socket ${socket.id} joined room: ${room} (total in room: ${roomSockets ? roomSockets.size : 0})`);
         }
       });
 
       socket.on('leave', (room) => {
         if (room) {
           socket.leave(room);
-          console.log(`Socket ${socket.id} left room: ${room}`);
+          console.log(`[Socket.IO Backend] Socket ${socket.id} left room: ${room}`);
         }
       });
 
       socket.on('disconnect', () => {
-        console.log(`Socket.IO client disconnected: ${socket.id}`);
+        console.log(`[Socket.IO Backend] Client disconnected: ${socket.id}`);
       });
 
       socket.on('error', (err) => {
-        console.error(`Socket.IO error for ${socket.id}:`, err);
+        console.error(`[Socket.IO Backend] Error for ${socket.id}:`, err);
       });
     });
 

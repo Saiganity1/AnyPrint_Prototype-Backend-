@@ -107,8 +107,11 @@ exports.sendMessage = asyncHandler(async (req, res) => {
     try {
       const socketModule = require('../socket');
       const ioInstance = socketModule.getIO();
+      const room = ioInstance.sockets.adapter.rooms.get(conversation_id);
+      const socketCount = room ? room.size : 0;
+      console.log(`[Chat sendMessage] Room ${conversation_id} has ${socketCount} socket(s)`);
       ioInstance.to(conversation_id).emit('new_message', messageJson);
-      console.log(`[Chat sendMessage] Socket.IO emitted to room ${conversation_id}`);
+      console.log(`[Chat sendMessage] Socket.IO emitted to room ${conversation_id}: ${JSON.stringify(messageJson)}`);
     } catch (err) {
       console.warn(`[Chat sendMessage] Socket.IO emit failed: ${err.message}`);
     }
