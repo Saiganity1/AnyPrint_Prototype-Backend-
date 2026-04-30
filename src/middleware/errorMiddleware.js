@@ -10,6 +10,10 @@ const errorHandler = (err, req, res, next) => {
     message: err.message || 'Internal Server Error',
   };
 
+  // Log all errors to console for debugging
+  console.error(`[ERROR] ${statusCode} - ${err.message}`);
+  console.error('[ERROR] Stack:', err.stack);
+
   if (err.name === 'CastError') {
     res.status(404);
     response.message = 'Resource not found';

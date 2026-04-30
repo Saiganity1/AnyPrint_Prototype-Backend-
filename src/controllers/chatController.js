@@ -21,80 +21,107 @@ function isManagerRole(role) {
 
 // Send a message
 exports.sendMessage = asyncHandler(async (req, res) => {
-  const { recipient_id, content } = req.body;
-  const sender_id = req.user.id;
-  const sender_role = normalizeRole(req.user.role);
-
-  if (!recipient_id || !content || !content.trim()) {
-    return res.status(400).json({ error: 'Recipient and message content are required' });
-  }
-
-  // Verify recipient exists
-  const recipient = await User.findById(recipient_id);
-  if (!recipient) {
-    return res.status(404).json({ error: 'Recipient not found' });
-  }
-
-  // Find the primary admin (owner preferred, then admin)
-  let primaryAdmin = await User.findOne({ role: 'owner' });
-  if (!primaryAdmin) {
-    primaryAdmin = await User.findOne({ role: 'admin' });
-  }
-
-  if (sender_role === 'user') {
-    // Users can ONLY message the primary admin
-    if (!primaryAdmin || recipient_id.toString() !== primaryAdmin._id.toString()) {
-      return res.status(403).json({ error: 'You can only message the shop admin' });
-    }
-  } else if (isManagerRole(req.user.role)) {
-    // Admins/owners can only reply to users
-    if (normalizeRole(recipient.role) !== 'user') {
-      return res.status(403).json({ error: 'Managers can only chat with users' });
-    }
-
-    // Verify a conversation was started by the user first
-    const existingConversation = await Message.exists({
-      conversation_id: [sender_id.toString(), recipient_id.toString()].sort().join('_'),
-    });
-
-    if (!existingConversation) {
-      return res.status(403).json({ error: 'Managers can only reply after a user starts the conversation' });
-    }
-  } else {
-    return res.status(403).json({ error: 'Unsupported chat role' });
-  }
-
-  // Create conversation ID (consistent regardless of order)
-  const conversation_id = [sender_id.toString(), recipient_id.toString()].sort().join('_');
-
-  const message = await Message.create({
-    conversation_id,
-    sender_id,
-    sender_name: req.user.name,
-    sender_role: req.user.role,
-    recipient_id,
-    content: content.trim(),
-  });
-
-  const populatedMessage = await message.populate('sender_id', 'name email');
-  const messageJson = populatedMessage.toJSON();
-
-  // Emit via socket.io to the conversation room if available
   try {
-    const socketModule = require('../socket');
-    const ioInstance = socketModule.getIO();
-    ioInstance.to(conversation_id).emit('new_message', messageJson);
-    console.log(`[Chat] Socket.IO emitted to room ${conversation_id}`);
-  } catch (err) {
-    console.warn(`[Chat] Socket.IO emit failed: ${err.message}`);
+    const { recipient_id, content } = req.body;
+    
+    // Debug logging
+    console.log('[Chat sendMessage] Starting...');
+    console.log('[Chat sendMessage] req.user:', req.user);
+    console.log('[Chat sendMessage] recipient_id:', recipient_id);
+    console.log('[Chat sendMessage] content:', content?.substring(0, 50));
+
+    if (!req.user) {
+      console.error('[Chat sendMessage] User not authenticated');
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const sender_id = req.user.id;
+    const sender_role = normalizeRole(req.user.role);
+
+    if (!recipient_id || !content || !content.trim()) {
+      return res.status(400).json({ error: 'Recipient and message content are required' });
+    }
+
+    // Verify recipient exists
+    console.log('[Chat sendMessage] Finding recipient:', recipient_id);
+    const recipient = await User.findById(recipient_id);
+    if (!recipient) {
+      return res.status(404).json({ error: 'Recipient not found' });
+    }
+    console.log('[Chat sendMessage] Recipient found:', recipient.name);
+
+    // Find the primary admin (owner preferred, then admin)
+    console.log('[Chat sendMessage] Finding primary admin...');
+    let primaryAdmin = await User.findOne({ role: 'owner' });
+    if (!primaryAdmin) {
+      primaryAdmin = await User.findOne({ role: 'admin' });
+    }
+    console.log('[Chat sendMessage] Primary admin:', primaryAdmin?.name);
+
+    if (sender_role === 'user') {
+      // Users can ONLY message the primary admin
+      if (!primaryAdmin || recipient_id.toString() !== primaryAdmin._id.toString()) {
+        return res.status(403).json({ error: 'You can only message the shop admin' });
+      }
+    } else if (isManagerRole(req.user.role)) {
+      // Admins/owners can only reply to users
+      if (normalizeRole(recipient.role) !== 'user') {
+        return res.status(403).json({ error: 'Managers can only chat with users' });
+      }
+
+      // Verify a conversation was started by the user first
+      const existingConversation = await Message.exists({
+        conversation_id: [sender_id.toString(), recipient_id.toString()].sort().join('_'),
+      });
+
+      if (!existingConversation) {
+        return res.status(403).json({ error: 'Managers can only reply after a user starts the conversation' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Unsupported chat role' });
+    }
+
+    // Create conversation ID (consistent regardless of order)
+    const conversation_id = [sender_id.toString(), recipient_id.toString()].sort().join('_');
+    console.log('[Chat sendMessage] Conversation ID:', conversation_id);
+
+    console.log('[Chat sendMessage] Creating message...');
+    const message = await Message.create({
+      conversation_id,
+      sender_id,
+      sender_name: req.user.name,
+      sender_role: req.user.role,
+      recipient_id,
+      content: content.trim(),
+    });
+    console.log('[Chat sendMessage] Message created:', message._id);
+
+    console.log('[Chat sendMessage] Populating message...');
+    const populatedMessage = await message.populate('sender_id', 'name email');
+    const messageJson = populatedMessage.toJSON();
+    console.log('[Chat sendMessage] Message populated:', messageJson._id);
+
+    // Emit via socket.io to the conversation room if available
+    try {
+      const socketModule = require('../socket');
+      const ioInstance = socketModule.getIO();
+      ioInstance.to(conversation_id).emit('new_message', messageJson);
+      console.log(`[Chat] Socket.IO emitted to room ${conversation_id}`);
+    } catch (err) {
+      console.warn(`[Chat] Socket.IO emit failed: ${err.message}`);
+    }
+
+    console.log(`[Chat] Message sent from ${sender_id} to ${recipient_id}`);
+
+    res.status(201).json({
+      success: true,
+      message: messageJson,
+    });
+  } catch (error) {
+    console.error('[Chat sendMessage] ERROR:', error.message);
+    console.error('[Chat sendMessage] Stack:', error.stack);
+    throw error; // Let asyncHandler catch it
   }
-
-  console.log(`[Chat] Message sent from ${req.user.id} to ${recipient_id}`);
-
-  res.status(201).json({
-    success: true,
-    message: messageJson,
-  });
 });
 
 // Get all conversations for the current user
