@@ -53,6 +53,10 @@ const isAllowedOrigin = (origin) => {
     return true;
   }
 
+  if (/^https:\/\/.*\.vercel\.app$/i.test(origin)) {
+    return true;
+  }
+
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
     return true;
   }
