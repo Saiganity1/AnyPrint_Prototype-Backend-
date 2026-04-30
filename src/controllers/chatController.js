@@ -77,19 +77,23 @@ exports.sendMessage = asyncHandler(async (req, res) => {
   });
 
   const populatedMessage = await message.populate('sender_id', 'name email');
+  const messageJson = populatedMessage.toJSON();
 
   // Emit via socket.io to the conversation room if available
   try {
     const socketModule = require('../socket');
     const ioInstance = socketModule.getIO();
-    ioInstance.to(conversation_id).emit('new_message', populatedMessage);
+    ioInstance.to(conversation_id).emit('new_message', messageJson);
+    console.log(`[Chat] Socket.IO emitted to room ${conversation_id}`);
   } catch (err) {
-    // socket not initialized or other error: continue silently
+    console.warn(`[Chat] Socket.IO emit failed: ${err.message}`);
   }
+
+  console.log(`[Chat] Message sent from ${req.user.id} to ${recipient_id}`);
 
   res.status(201).json({
     success: true,
-    message: populatedMessage,
+    message: messageJson,
   });
 });
 
