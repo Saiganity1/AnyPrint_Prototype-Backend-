@@ -35,15 +35,24 @@ exports.sendMessage = asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Recipient not found' });
   }
 
+  // Find the primary admin (owner preferred, then admin)
+  let primaryAdmin = await User.findOne({ role: 'owner' });
+  if (!primaryAdmin) {
+    primaryAdmin = await User.findOne({ role: 'admin' });
+  }
+
   if (sender_role === 'user') {
-    if (!isManagerRole(recipient.role)) {
-      return res.status(403).json({ error: 'Users can only message admin or owner accounts' });
+    // Users can ONLY message the primary admin
+    if (!primaryAdmin || recipient_id.toString() !== primaryAdmin._id.toString()) {
+      return res.status(403).json({ error: 'You can only message the shop admin' });
     }
   } else if (isManagerRole(req.user.role)) {
+    // Admins/owners can only reply to users
     if (normalizeRole(recipient.role) !== 'user') {
-      return res.status(403).json({ error: 'Managers can only reply to users' });
+      return res.status(403).json({ error: 'Managers can only chat with users' });
     }
 
+    // Verify a conversation was started by the user first
     const existingConversation = await Message.exists({
       conversation_id: [sender_id.toString(), recipient_id.toString()].sort().join('_'),
     });
