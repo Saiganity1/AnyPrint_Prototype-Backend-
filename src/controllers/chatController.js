@@ -22,70 +22,73 @@ function isManagerRole(role) {
 // Send a message
 exports.sendMessage = asyncHandler(async (req, res) => {
   try {
+    console.log('\n[Chat sendMessage] ========== START ==========');
+    console.log('[Chat sendMessage] req.body:', req.body);
+    console.log('[Chat sendMessage] req.user:', req.user ? { id: req.user.id, role: req.user.role, name: req.user.name } : 'NOT AUTHENTICATED');
+
     const { recipient_id, content } = req.body;
-    
-    // Debug logging
-    console.log('[Chat sendMessage] Starting...');
-    console.log('[Chat sendMessage] req.user:', req.user);
-    console.log('[Chat sendMessage] recipient_id:', recipient_id);
-    console.log('[Chat sendMessage] content:', content?.substring(0, 50));
 
     if (!req.user) {
-      console.error('[Chat sendMessage] User not authenticated');
-      return res.status(401).json({ error: 'Not authenticated' });
+      console.error('[Chat sendMessage] ERROR: User not authenticated');
+      return res.status(401).json({ error: 'Not authenticated - missing user' });
+    }
+
+    if (!recipient_id || !content || !content.trim()) {
+      console.error('[Chat sendMessage] ERROR: Missing recipient_id or content');
+      return res.status(400).json({ error: 'Recipient and message content are required' });
     }
 
     const sender_id = req.user.id;
     const sender_role = normalizeRole(req.user.role);
-
-    if (!recipient_id || !content || !content.trim()) {
-      return res.status(400).json({ error: 'Recipient and message content are required' });
-    }
+    
+    console.log('[Chat sendMessage] sender_id:', sender_id, 'role:', sender_role);
 
     // Verify recipient exists
     console.log('[Chat sendMessage] Finding recipient:', recipient_id);
     const recipient = await User.findById(recipient_id);
     if (!recipient) {
+      console.error('[Chat sendMessage] ERROR: Recipient not found');
       return res.status(404).json({ error: 'Recipient not found' });
     }
-    console.log('[Chat sendMessage] Recipient found:', recipient.name);
+    console.log('[Chat sendMessage] Recipient found:', recipient.name, recipient.role);
 
-    // Find the primary admin (owner preferred, then admin)
+    // Find the primary admin
     console.log('[Chat sendMessage] Finding primary admin...');
     let primaryAdmin = await User.findOne({ role: 'owner' });
     if (!primaryAdmin) {
       primaryAdmin = await User.findOne({ role: 'admin' });
     }
-    console.log('[Chat sendMessage] Primary admin:', primaryAdmin?.name);
+    console.log('[Chat sendMessage] Primary admin:', primaryAdmin ? primaryAdmin.name : 'NOT FOUND');
 
+    // Validate permissions
     if (sender_role === 'user') {
-      // Users can ONLY message the primary admin
       if (!primaryAdmin || recipient_id.toString() !== primaryAdmin._id.toString()) {
+        console.error('[Chat sendMessage] ERROR: User trying to message non-admin. Recipient:', recipient_id, 'Admin:', primaryAdmin?._id);
         return res.status(403).json({ error: 'You can only message the shop admin' });
       }
     } else if (isManagerRole(req.user.role)) {
-      // Admins/owners can only reply to users
       if (normalizeRole(recipient.role) !== 'user') {
+        console.error('[Chat sendMessage] ERROR: Manager trying to message non-user');
         return res.status(403).json({ error: 'Managers can only chat with users' });
       }
 
-      // Verify a conversation was started by the user first
       const existingConversation = await Message.exists({
         conversation_id: [sender_id.toString(), recipient_id.toString()].sort().join('_'),
       });
 
       if (!existingConversation) {
+        console.error('[Chat sendMessage] ERROR: Manager replying to non-existent conversation');
         return res.status(403).json({ error: 'Managers can only reply after a user starts the conversation' });
       }
     } else {
+      console.error('[Chat sendMessage] ERROR: Unsupported role:', sender_role);
       return res.status(403).json({ error: 'Unsupported chat role' });
     }
 
-    // Create conversation ID (consistent regardless of order)
+    // Create message
     const conversation_id = [sender_id.toString(), recipient_id.toString()].sort().join('_');
-    console.log('[Chat sendMessage] Conversation ID:', conversation_id);
+    console.log('[Chat sendMessage] Creating message in conversation:', conversation_id);
 
-    console.log('[Chat sendMessage] Creating message...');
     const message = await Message.create({
       conversation_id,
       sender_id,
@@ -96,31 +99,32 @@ exports.sendMessage = asyncHandler(async (req, res) => {
     });
     console.log('[Chat sendMessage] Message created:', message._id);
 
-    console.log('[Chat sendMessage] Populating message...');
     const populatedMessage = await message.populate('sender_id', 'name email');
     const messageJson = populatedMessage.toJSON();
-    console.log('[Chat sendMessage] Message populated:', messageJson._id);
+    console.log('[Chat sendMessage] Message populated successfully');
 
-    // Emit via socket.io to the conversation room if available
+    // Emit via socket.io
     try {
       const socketModule = require('../socket');
       const ioInstance = socketModule.getIO();
       ioInstance.to(conversation_id).emit('new_message', messageJson);
-      console.log(`[Chat] Socket.IO emitted to room ${conversation_id}`);
+      console.log(`[Chat sendMessage] Socket.IO emitted to room ${conversation_id}`);
     } catch (err) {
-      console.warn(`[Chat] Socket.IO emit failed: ${err.message}`);
+      console.warn(`[Chat sendMessage] Socket.IO emit failed: ${err.message}`);
     }
 
-    console.log(`[Chat] Message sent from ${sender_id} to ${recipient_id}`);
+    console.log('[Chat sendMessage] ========== SUCCESS ==========\n');
 
     res.status(201).json({
       success: true,
       message: messageJson,
     });
   } catch (error) {
-    console.error('[Chat sendMessage] ERROR:', error.message);
+    console.error('[Chat sendMessage] ========== CAUGHT ERROR ==========');
+    console.error('[Chat sendMessage] Error:', error.message);
     console.error('[Chat sendMessage] Stack:', error.stack);
-    throw error; // Let asyncHandler catch it
+    console.error('[Chat sendMessage] ========== END ERROR ==========\n');
+    throw error; // Let asyncHandler pass to error middleware
   }
 });
 

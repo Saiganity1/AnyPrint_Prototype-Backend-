@@ -97,6 +97,10 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'AnyPrint Avenue API is running' });
 });
 
+app.get('/', (req, res) => {
+  res.json({ success: true, message: 'AnyPrint Backend API Online' });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
